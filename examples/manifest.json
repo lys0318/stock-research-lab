@@ -1,0 +1,14 @@
+[
+  {
+    "dataset_id": "REPLACE_WITH_DATASET_ID",
+    "start": "2024-01-01",
+    "end": "2025-12-31",
+    "strategy": "ma",
+    "capital": 1000000,
+    "fee": 0.00015,
+    "tax": 0,
+    "slippage": 0.0005,
+    "ma_window": 20,
+    "seed": 42
+  }
+]

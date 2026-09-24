@@ -1,0 +1,425 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Research lab: private datasets, Batch Fargate, private static website with CloudFront OAC. Deploy explicitly.",
+  "Parameters": {
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PublicSubnets": {
+      "Type": "List<AWS::EC2::Subnet::Id>"
+    },
+    "ImageUri": {
+      "Type": "String",
+      "Description": "ECR image digest URI, built for Linux x86_64"
+    },
+    "BudgetEmail": {
+      "Type": "String"
+    },
+    "MonthlyBudgetUSD": {
+      "Type": "Number",
+      "Default": 15,
+      "MinValue": 1,
+      "MaxValue": 20
+    }
+  },
+  "Resources": {
+    "ResearchBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "SiteBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      }
+    },
+    "Logs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "RetentionInDays": 7
+      }
+    },
+    "ExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        ]
+      }
+    },
+    "JobRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ResearchObjectsOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ResearchBucket.Arn}/experiments/*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "SecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Outbound HTTPS only, no inbound",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "Compute": {
+      "Type": "AWS::Batch::ComputeEnvironment",
+      "Properties": {
+        "Type": "MANAGED",
+        "State": "ENABLED",
+        "ComputeResources": {
+          "Type": "FARGATE",
+          "MaxvCpus": 4,
+          "Subnets": {
+            "Ref": "PublicSubnets"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "SecurityGroup"
+            }
+          ]
+        }
+      }
+    },
+    "Queue": {
+      "Type": "AWS::Batch::JobQueue",
+      "Properties": {
+        "State": "ENABLED",
+        "Priority": 1,
+        "ComputeEnvironmentOrder": [
+          {
+            "Order": 1,
+            "ComputeEnvironment": {
+              "Ref": "Compute"
+            }
+          }
+        ]
+      }
+    },
+    "Job": {
+      "Type": "AWS::Batch::JobDefinition",
+      "Properties": {
+        "Type": "container",
+        "PlatformCapabilities": [
+          "FARGATE"
+        ],
+        "Timeout": {
+          "AttemptDurationSeconds": 600
+        },
+        "RetryStrategy": {
+          "Attempts": 1
+        },
+        "ContainerProperties": {
+          "Image": {
+            "Ref": "ImageUri"
+          },
+          "ExecutionRoleArn": {
+            "Fn::GetAtt": [
+              "ExecutionRole",
+              "Arn"
+            ]
+          },
+          "JobRoleArn": {
+            "Fn::GetAtt": [
+              "JobRole",
+              "Arn"
+            ]
+          },
+          "ResourceRequirements": [
+            {
+              "Type": "VCPU",
+              "Value": "1"
+            },
+            {
+              "Type": "MEMORY",
+              "Value": "2048"
+            }
+          ],
+          "RuntimePlatform": {
+            "CpuArchitecture": "X86_64",
+            "OperatingSystemFamily": "LINUX"
+          },
+          "NetworkConfiguration": {
+            "AssignPublicIp": "ENABLED"
+          },
+          "LogConfiguration": {
+            "LogDriver": "awslogs",
+            "Options": {
+              "awslogs-group": {
+                "Ref": "Logs"
+              },
+              "awslogs-region": {
+                "Ref": "AWS::Region"
+              },
+              "awslogs-stream-prefix": "research"
+            }
+          },
+          "Environment": [
+            {
+              "Name": "OMP_NUM_THREADS",
+              "Value": "1"
+            },
+            {
+              "Name": "OPENBLAS_NUM_THREADS",
+              "Value": "1"
+            },
+            {
+              "Name": "MKL_NUM_THREADS",
+              "Value": "1"
+            }
+          ]
+        }
+      }
+    },
+    "OriginAccess": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-oac"
+          },
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      }
+    },
+    "Distribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "DefaultRootObject": "index.html",
+          "PriceClass": "PriceClass_100",
+          "Origins": [
+            {
+              "Id": "site",
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "SiteBucket",
+                  "RegionalDomainName"
+                ]
+              },
+              "OriginAccessControlId": {
+                "Ref": "OriginAccess"
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "site",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "Compress": true,
+            "ForwardedValues": {
+              "QueryString": false,
+              "Cookies": {
+                "Forward": "none"
+              }
+            },
+            "DefaultTTL": 300,
+            "MinTTL": 0,
+            "MaxTTL": 3600
+          },
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          }
+        }
+      }
+    },
+    "SitePolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "SiteBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Action": "s3:GetObject",
+              "Resource": {
+                "Fn::Sub": "${SiteBucket.Arn}/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Sub": "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Budget": {
+      "Type": "AWS::Budgets::Budget",
+      "Properties": {
+        "Budget": {
+          "BudgetName": {
+            "Fn::Sub": "${AWS::StackName}-monthly"
+          },
+          "BudgetLimit": {
+            "Amount": {
+              "Ref": "MonthlyBudgetUSD"
+            },
+            "Unit": "USD"
+          },
+          "TimeUnit": "MONTHLY",
+          "BudgetType": "COST"
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {
+              "NotificationType": "ACTUAL",
+              "ComparisonOperator": "GREATER_THAN",
+              "Threshold": 70,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "BudgetEmail"
+                }
+              }
+            ]
+          },
+          {
+            "Notification": {
+              "NotificationType": "FORECASTED",
+              "ComparisonOperator": "GREATER_THAN",
+              "Threshold": 100,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "BudgetEmail"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ResearchBucket": {
+      "Value": {
+        "Ref": "ResearchBucket"
+      }
+    },
+    "SiteBucket": {
+      "Value": {
+        "Ref": "SiteBucket"
+      }
+    },
+    "Queue": {
+      "Value": {
+        "Ref": "Queue"
+      }
+    },
+    "JobDefinition": {
+      "Value": {
+        "Ref": "Job"
+      }
+    },
+    "SiteUrl": {
+      "Value": {
+        "Fn::Sub": "https://${Distribution.DomainName}"
+      }
+    }
+  }
+}

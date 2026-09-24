@@ -1,0 +1,21 @@
+:root {
+  --canvas: #f3f3f3;
+  --panel: #ffffff;
+  --ink: #0d0d0d;
+  --ink-2: #5d5d5d;
+  --ink-3: #8f8f8f;
+  --line: #e8e8e8;
+  --line-strong: #d4d4d4;
+  --chip: #f0f0f0;
+  --chip-hover: #e6e6e6;
+  --soft: #f7f7f7;
+  --up: #e5383b;
+  --down: #2563eb;
+  --danger-bg: #fdecec;
+  --danger-ink: #b42318;
+  --radius-panel: 16px;
+  --radius-card: 14px;
+  --radius-field: 10px;
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, .04), 0 6px 20px rgba(0, 0, 0, .06);
+  color-scheme: light;
+}

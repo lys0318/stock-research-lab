@@ -1,0 +1,7 @@
+data
+.venv
+web
+.git
+artifacts
+.env
+토스증권 api 키.txt
