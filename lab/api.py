@@ -9,7 +9,6 @@ from datetime import date
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, model_validator
-from typing import Literal
 from . import store
 from .data import datasets, load_dataset
 
@@ -35,25 +34,43 @@ async def local_only(request: Request, call_next):
     allowed = ["http://127.0.0.1:5173","http://localhost:5173","http://127.0.0.1:8000","http://localhost:8000"]
     if origin and origin not in allowed:
         return JSONResponse({"detail":"허용되지 않은 Origin"},status_code=403)
-    if request.method == "POST" and request.headers.get("x-research-local") != "1":
+    if request.method in ("POST","DELETE") and request.headers.get("x-research-local") != "1":
         return JSONResponse({"detail":"로컬 실행 헤더가 필요합니다."},status_code=403)
     return await call_next(request)
 
-class RunConfig(BaseModel):
+class Period(BaseModel):
     dataset_id: str = Field(pattern=r"^[a-f0-9]{20}$")
     start: date
     end: date
-    strategy: Literal["hold","ma","model"]
     capital: float = Field(default=1000000,ge=1000,le=1e10)
     fee: float = Field(default=.00015,ge=0,le=.05)
     tax: float = Field(default=0,ge=0,le=.05)
     slippage: float = Field(default=.0005,ge=0,le=.05)
-    seed: int = Field(default=42,ge=0,le=2147483647)
-    ma_window: int = Field(default=20,ge=2,le=250)
     @model_validator(mode="after")
     def check_dates(self):
         if self.start >= self.end: raise ValueError("시작일은 종료일보다 빨라야 합니다.")
         return self
+
+class RunConfig(Period):
+    strategy: str
+    seed: int = Field(default=42,ge=0,le=2147483647)
+    ma_window: int = Field(default=20,ge=2,le=250)
+    params: dict[str, float] = Field(default_factory=dict)
+    @model_validator(mode="after")
+    def check_strategy(self):
+        from .strategies import resolve
+        resolve(self.strategy,self.params,self.ma_window)  # unknown strategy/params, ranges, short<long...
+        return self
+
+def check_range(period: Period):
+    """422 unless the period lies inside the saved data and spans at least 10 trading days."""
+    try:
+        frame, meta = load_dataset(period.dataset_id)
+        if str(period.start)<meta["start"] or str(period.end)>meta["end"]:
+            raise ValueError(f"확보 기간 {meta['start']} ~ {meta['end']} 안에서 선택하세요.")
+        if ((frame.date >= str(period.start)) & (frame.date <= str(period.end))).sum() < 10:
+            raise ValueError("평가 기간에는 최소 10개의 거래일이 필요합니다.")
+    except ValueError as e: raise HTTPException(422,str(e))
 
 @app.get("/api/datasets")
 def dataset_list(): return datasets()
@@ -79,13 +96,7 @@ def submit(config: RunConfig):
 def _submit(config: RunConfig):
     active = sum(p.poll() is None for p in processes.values())
     if active >= 2: raise HTTPException(429,"동시 작업은 최대 2개입니다.")
-    try:
-        frame, meta = load_dataset(config.dataset_id)
-        if str(config.start)<meta["start"] or str(config.end)>meta["end"]:
-            raise ValueError(f"확보 기간 {meta['start']} ~ {meta['end']} 안에서 선택하세요.")
-        if ((frame.date >= str(config.start)) & (frame.date <= str(config.end))).sum() < 10:
-            raise ValueError("평가 기간에는 최소 10개의 거래일이 필요합니다.")
-    except ValueError as e: raise HTTPException(422,str(e))
+    check_range(config)
     identifier = uuid.uuid4().hex
     store.create(identifier,config.model_dump(mode="json"))
     try:
@@ -105,6 +116,27 @@ def _submit(config: RunConfig):
             process.wait(timeout=10)
     threading.Thread(target=monitor,daemon=True).start()
     return store.get(identifier)
+
+@app.get("/api/strategies")
+def strategy_catalog():
+    from .strategies import catalog
+    return catalog()
+
+@app.post("/api/compare")
+def compare(period: Period):
+    """Every strategy with default settings on one period. In-process: ~11 short backtests."""
+    from .engine import round_trips, run
+    from .strategies import STRATEGIES
+    check_range(period)
+    rows = []
+    for key, spec in STRATEGIES.items():
+        row = dict(strategy=key, label=spec["label"], group=spec["group"], metrics=None, trips=0, win_rate=None, error=None)
+        try:
+            pnl = round_trips((result := run(dict(period.model_dump(mode="json"), strategy=key)))["trades"])
+            row.update(metrics=result["metrics"], trips=len(pnl), win_rate=sum(p > 0 for p in pnl)/len(pnl) if pnl else None)
+        except ValueError as e: row["error"] = str(e)
+        rows.append(row)
+    return rows
 
 @app.get("/api/stocks")
 def stock_search(q: str = ""):
@@ -152,6 +184,13 @@ def cancel(identifier: str):
             process.terminate()
             process.wait(timeout=10)
     return store.get(identifier)
+
+@app.delete("/api/runs/{identifier}", status_code=204)
+def delete_run(identifier: str):
+    job_or_404(identifier)
+    cancel(identifier)  # stops a queued/running worker first; no-op otherwise
+    processes.pop(identifier, None)
+    store.delete(identifier)
 
 @app.get("/api/runs/{identifier}/results")
 def results(identifier: str):

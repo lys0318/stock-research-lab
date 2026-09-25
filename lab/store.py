@@ -30,6 +30,10 @@ def listing():
     with db() as c: rows = c.execute("SELECT id FROM runs ORDER BY created_at DESC LIMIT 100").fetchall()
     return [get(row["id"]) for row in rows]
 
+def delete(identifier):
+    with db() as c: c.execute("DELETE FROM runs WHERE id=?",(identifier,))
+    result_path(identifier).unlink(missing_ok=True)
+
 def result_path(identifier):
     folder = root() / "runs"
     folder.mkdir(exist_ok=True)

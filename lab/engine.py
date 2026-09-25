@@ -96,6 +96,10 @@ def simulate(frame, signals, strategy, capital=1000000, fee=.00015, tax=0., slip
         total_return=float(equity[-1]/capital-1), max_drawdown=float(drawdown.min()),
         trade_count=len(trades), final_equity=float(equity[-1])))
 
+def round_trips(trades):
+    """Profit of each buy→sell pair, costs on both legs. Trades always alternate buy, sell."""
+    return [s["shares"]*s["price"]-s["costs"]-(b["shares"]*b["price"]+b["costs"]) for b, s in zip(trades[::2], trades[1::2])]
+
 def run(config):
     began = time.perf_counter()
     frame, meta = load_dataset(config["dataset_id"])

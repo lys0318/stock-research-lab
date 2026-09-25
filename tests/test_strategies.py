@@ -79,3 +79,35 @@ def test_run_with_chart_strategy():
     r = run(dict(dataset_id=meta["id"], start="2024-01-01", end="2025-12-31", strategy="golden", params={"short": 10, "long": 30}))
     assert r["strategy_params"] == {"short": 10, "long": 30}
     assert r["metrics"]["trade_count"] > 0 and "marks" in r
+
+LOCAL = {"X-Research-Local": "1"}
+
+def test_strategy_catalog_compare_and_validation():
+    from fastapi.testclient import TestClient
+    from lab.api import app
+    meta = demo()
+    body = dict(dataset_id=meta["id"], start="2024-01-01", end="2025-12-31")
+    with TestClient(app) as c:
+        catalog = c.get("/api/strategies").json()
+        assert len(catalog) == len(S.STRATEGIES) and any(s["key"] == "hns" and s["params"] for s in catalog)
+        rows = c.post("/api/compare", json=body, headers=LOCAL).json()
+        assert [r["strategy"] for r in rows] == list(S.STRATEGIES)
+        assert all((r["metrics"] is None) == (r["error"] is not None) for r in rows)
+        assert c.post("/api/compare", json=body).status_code == 403
+        bad = dict(body, strategy="golden", params={"short": 60, "long": 20})
+        assert c.post("/api/runs", json=bad, headers=LOCAL).status_code == 422
+        assert c.post("/api/runs", json=dict(body, strategy="nope"), headers=LOCAL).status_code == 422
+
+def test_delete_run_removes_row_and_file():
+    from fastapi.testclient import TestClient
+    from lab import store
+    from lab.api import app
+    store.create("gone", {})
+    store.result_path("gone").write_text("{}", encoding="utf-8")
+    store.update("gone", "completed")
+    with TestClient(app) as c:
+        assert c.delete("/api/runs/gone").status_code == 403
+        assert c.delete("/api/runs/gone", headers=LOCAL).status_code == 204
+        assert c.get("/api/runs/gone").status_code == 404
+        assert c.delete("/api/runs/gone", headers=LOCAL).status_code == 404
+    assert not store.result_path("gone").exists()
