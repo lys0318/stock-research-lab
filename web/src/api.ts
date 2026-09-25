@@ -54,17 +54,30 @@ export type Benchmark = {
   }[];
 };
 export type StockHit = { symbol: string; name: string; market: string | null; dataset_id: string | null; end: string | null };
+export type Point = { date: string; price: number };
+export type Band = { date: string; p10: number; p25: number; p75: number; p90: number };
+export type Analog = { start: string; end: string; change: number; gap: number; path: Point[]; shape: number[] };
 export type Forecast = {
   horizon: number;
+  window: number;
   last_date: string;
   last_close: number;
-  path: { date: string; price: number }[];
+  path: Point[];
+  band: Band[];
+  probabilities: { up: number; up10: number; down10: number };
+  drivers: { key: string; label: string; value: number; contribution: number }[];
+  trend: number;
+  analogs: Analog[];
+  current_shape: number[];
   prices: Price[];
   evaluation: {
     hit_rate: number;
     up_rate: number;
     mape: number;
     naive_mape: number;
+    band80_cover: number;
+    band50_cover: number;
+    analog_hit_rate: number | null;
     train_rows: number;
     test_rows: number;
     train_label_end: string;

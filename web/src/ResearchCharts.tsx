@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Plotly from "plotly.js-finance-dist-min";
 import type { Annotations, Data, Layout, PlotlyHTMLElement, RangeSlider, Shape } from "plotly.js";
-import type { Price, Result, Trade } from "./api";
+import type { Band, Point, Price, Result, Trade } from "./api";
 
 const up = "#e5383b", down = "#2563eb", ink = "#0d0d0d", grid = "#efefef";
 const maColors: Record<number, string> = { 5: "#f59f00", 20: "#12b886", 60: "#7048e8", 120: "#868e96" };
@@ -70,11 +70,16 @@ const shift = (date: string, days: number) => { const d = new Date(date); d.setU
 type Kind = "candlestick" | "ohlc" | "line" | "area";
 const kinds: [Kind, string][] = [["candlestick", "캔들"], ["ohlc", "OHLC 막대"], ["line", "선"], ["area", "영역"]];
 
-export function PriceChart({ prices, trades = [], path, focus = null, label }: {
-  prices: Price[]; trades?: Trade[]; path?: { date: string; price: number }[]; focus?: number | null; label: string;
+export type Scenario = { label: string; path: Point[]; rising: boolean };
+
+export function PriceChart({ prices, trades = [], path, band, scenarios, focus = null, label }: {
+  prices: Price[]; trades?: Trade[]; path?: Point[]; band?: Band[]; scenarios?: Scenario[]; focus?: number | null; label: string;
 }) {
   const [kind, setKind] = useState<Kind>("candlestick");
   const [mas, setMas] = useState<number[]>([20, 60]);
+  const [showBand, setShowBand] = useState(true);
+  const [showScenarios, setShowScenarios] = useState(true);
+  const bands = showBand ? band : undefined, lines = showScenarios ? scenarios : undefined;
   const selected = focus === null ? null : trades[focus];
   const { traces, layout, autoY } = useMemo(() => {
     const dates = prices.map((p) => p.date);
@@ -115,6 +120,21 @@ export function PriceChart({ prices, trades = [], path, focus = null, label }: {
       marker: { symbol: "circle-open", size: 24, color: ink, line: { width: 2 } }, hoverinfo: "skip" });
     const shapes: Partial<Shape>[] = [];
     const annotations: Partial<Annotations>[] = [];
+    if (bands?.length && last) {
+      // Each range is an upper edge followed by a lower edge filled back to it ("tonexty"), starting at today's close.
+      const x = [last.date, ...bands.map((b) => b.date)];
+      const edge = (key: "p10" | "p25" | "p75" | "p90") => [last.close, ...bands.map((b) => b[key])];
+      for (const [hi, lo, fill, name] of [["p90", "p10", "rgba(13,13,13,.07)", "80%"], ["p75", "p25", "rgba(13,13,13,.13)", "50%"]] as const) {
+        traces.push({ type: "scatter", mode: "lines", x, y: edge(hi), line: { width: 0 }, hoverinfo: "skip", showlegend: false });
+        traces.push({ type: "scatter", mode: "lines", x, y: edge(lo), line: { width: 0 }, fill: "tonexty", fillcolor: fill, showlegend: false,
+          text: [`현재 ${money(last.close)}원`, ...bands.map((b) => `${name} 범위 ${money(b[lo])} ~ ${money(b[hi])}원`)], hovertemplate: "%{x}<br>%{text}<extra></extra>" });
+      }
+    }
+    for (const s of (last && lines) || []) traces.push({
+      type: "scatter", mode: "lines", name: s.label, x: [last.date, ...s.path.map((p) => p.date)], y: [last.close, ...s.path.map((p) => p.price)],
+      line: { color: s.rising ? "rgba(229,56,59,.55)" : "rgba(37,99,235,.55)", width: 1.2 },
+      hovertemplate: `${s.label}<br>%{x} %{y:,.0f}원<extra></extra>`,
+    });
     if (path?.length && last) {
       const target = path[path.length - 1];
       traces.push({
@@ -127,14 +147,16 @@ export function PriceChart({ prices, trades = [], path, focus = null, label }: {
     }
     const autoY: AutoY = (inside) => {
       const values = [...prices.filter((p) => inside(p.date)).flatMap((p) => [p.low, p.high]),
-        ...trades.filter((t) => inside(t.date)).map((t) => t.price), ...(path || []).filter((p) => inside(p.date)).map((p) => p.price)];
+        ...trades.filter((t) => inside(t.date)).map((t) => t.price), ...(path || []).filter((p) => inside(p.date)).map((p) => p.price),
+        ...(bands || []).filter((b) => inside(b.date)).flatMap((b) => [b.p10, b.p90]),
+        ...(lines || []).flatMap((s) => s.path.filter((p) => inside(p.date)).map((p) => p.price))];
       if (!values.length) return null;
       const low = Math.min(...values), high = Math.max(...values), pad = Math.max((high - low) * .12, high * .005);
       return [low - pad, high + pad];
     };
     const range = selected
       ? [shift(selected.date, -20) < dates[0] ? dates[0] : shift(selected.date, -20), shift(selected.date, 20) > end ? end : shift(selected.date, 20)]
-      : [dates[Math.max(0, dates.length - 130)], end];
+      : [dates[Math.max(0, dates.length - (path?.length ? 80 : 130))], end];  // forecasts: tighter so the future part is readable
     const layout: Partial<Layout> = {
       // The MA toggles double as the legend; an in-chart legend collides with the range buttons on phones.
       height: 520, shapes, annotations, showlegend: false, margin: { l: 60, r: 12, t: 40, b: 32 },
@@ -157,7 +179,7 @@ export function PriceChart({ prices, trades = [], path, focus = null, label }: {
       yaxis2: { domain: [0, .17], gridcolor: grid, tickformat: ".2s", fixedrange: false },
     };
     return { traces, layout, autoY };
-  }, [prices, trades, path, selected, focus, kind, mas, label]);
+  }, [prices, trades, path, bands, lines, selected, focus, kind, mas, label]);
   if (!prices.length) return <p className="notice">이 저장 결과에는 일봉이 포함되어 있지 않습니다. 같은 조건으로 다시 실행하면 주가 차트를 볼 수 있습니다.</p>;
   return <div className="chart" id="price-chart">
     <div className="chart-tools">
@@ -168,13 +190,15 @@ export function PriceChart({ prices, trades = [], path, focus = null, label }: {
         {[5, 20, 60, 120].map((n) => <button key={n} className="ma-toggle" aria-pressed={mas.includes(n)}
           onClick={() => setMas((m) => m.includes(n) ? m.filter((x) => x !== n) : [...m, n].sort((a, b) => a - b))}>
           <i style={{ background: maColors[n] }} />{n}일</button>)}
+        {band && <button className="ma-toggle" aria-pressed={showBand} onClick={() => setShowBand(!showBand)}><i className="swatch-band" />범위</button>}
+        {scenarios && <button className="ma-toggle" aria-pressed={showScenarios} onClick={() => setShowScenarios(!showScenarios)}><i className="swatch-scenario" />시나리오</button>}
       </div>
     </div>
     {selected && <div className="trade-detail" role="status"><strong>{selected.date} · {selected.side === "buy" ? "▲ 매수" : "▼ 매도"}</strong><span>체결가 {money(selected.price)}원 · {selected.shares}주 · 비용 {money(selected.costs)}원</span></div>}
     <Plot traces={traces} layout={layout} autoY={autoY} label={label} />
     <p className="caption chart-key">
       {trades.length > 0 && <><span className="up">▲ 매수</span> <span className="down">▼ 매도</span> · </>}
-      {path?.length ? "점선은 예측 경로 · " : ""}캔들은 상승 빨강 / 하락 파랑 · 주말·휴장일 제외 · 드래그로 확대, 더블 클릭으로 초기화
+      {path?.length ? "점선은 중앙 예측 · " : ""}{band ? "음영은 50%·80% 예측 범위 · " : ""}{scenarios ? "가는 선은 비슷한 과거 차트 이후 흐름 · " : ""}캔들은 상승 빨강 / 하락 파랑 · 주말·휴장일 제외 · 드래그로 확대, 더블 클릭으로 초기화
     </p>
   </div>;
 }
