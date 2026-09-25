@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, LineChart, Play, Sparkles } from "lucide-react";
-import { api, labels, nameHints, publicMode, states, type Config, type Dataset, type Job, type Result } from "./api";
+import { ArrowLeft, ChevronDown, LineChart, ListOrdered, Play, Sparkles } from "lucide-react";
+import { api, nameHints, publicMode, states, type CompareRow, type Config, type Dataset, type Job, type Result, type StrategyInfo } from "./api";
+import CompareTable from "./Compare";
 import ResultView from "./Result";
 import ForecastView from "./Forecast";
 
 type Preset = "1y" | "2y" | "5y" | "all" | "custom";
 const presets: [Preset, string][] = [["1y", "1년"], ["2y", "2년"], ["5y", "5년"], ["all", "전체"], ["custom", "직접"]];
-const strategies: [string, string][] = [
-  ["hold", "첫날 사서 마지막 날 팝니다. 다른 전략의 비교 기준입니다."],
-  ["ma", "전날 종가가 이동평균보다 높으면 보유, 낮으면 다음 날 시가에 팝니다."],
-  ["model", "5일 뒤 오를 확률이 높을 때만 사서 5일 보유합니다. 시작일 전 2년 데이터가 필요합니다."],
-];
+const groups = ["기본", "추세", "반전", "모멘텀"];
 const defaults: Config = { dataset_id: "", start: "", end: "", strategy: "ma", capital: 1000000, fee: .00015, tax: 0, slippage: .0005, ma_window: 20, seed: 42 };
 
 function period(d: Dataset, preset: Preset, c: Config) {
@@ -37,6 +34,9 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
   const [advanced, setAdvanced] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [result, setResult] = useState<Result | null>(initial ?? null);
+  const [catalog, setCatalog] = useState<StrategyInfo[]>([]);
+  const [compare, setCompare] = useState<CompareRow[] | null>(null);
+  const [comparing, setComparing] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
   const running = !!job && ["queued", "running"].includes(job.status);
 
@@ -73,24 +73,39 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
   }, [job]);
 
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+  useEffect(() => { if (!publicMode) api<StrategyInfo[]>("/strategies").then(setCatalog).catch((e) => setError((e as Error).message)); }, []);
 
   function choose(p: Preset) {
     setPreset(p);
     if (dataset) setConfig((c) => ({ ...c, ...period(dataset, p, c) }));
   }
-  async function run(e: React.FormEvent) {
-    e.preventDefault();
+  async function start(cfg: Config) {
     setError("");
     try {
-      setJob(await api<Job>("/runs", { method: "POST", body: JSON.stringify(config) }));
+      setJob(await api<Job>("/runs", { method: "POST", body: JSON.stringify(cfg) }));
       onChanged();
     } catch (err) { setError((err as Error).message); }
+  }
+  async function compareAll() {
+    setError("");
+    setComparing(true);
+    try {
+      const { dataset_id, start: from, end, capital, fee, tax, slippage } = config;
+      setCompare(await api<CompareRow[]>("/compare", { method: "POST", body: JSON.stringify({ dataset_id, start: from, end, capital, fee, tax, slippage }) }));
+    } catch (err) { setError((err as Error).message); }
+    finally { setComparing(false); }
+  }
+  function detail(strategy: string) {
+    const cfg = { ...config, strategy, params: {} };
+    setConfig(cfg);
+    void start(cfg);
   }
   async function cancel() {
     if (!job) return;
     try { setJob(await api<Job>(`/runs/${job.id}/cancel`, { method: "POST" })); onChanged(); }
     catch (err) { setError((err as Error).message); }
   }
+  const selected = catalog.find((s) => s.key === config.strategy);
   const name = dataset?.name ?? initial?.dataset.name ?? nameHints.get(symbol) ?? symbol;
   const field = (key: "fee" | "tax" | "slippage", label: string, hint: string) => <label>
     {label}
@@ -119,7 +134,7 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
         <button role="tab" aria-selected={tab === "forecast"} onClick={() => setTab("forecast")}><Sparkles size={16} />미래 예측</button>
       </div>
       {tab === "forecast" ? <ForecastView dataset={dataset} /> : <div className="workspace">
-        <form className="settings" onSubmit={run}>
+        <form className="settings" onSubmit={(e) => { e.preventDefault(); void start(config); }}>
           <fieldset>
             <legend>기간</legend>
             <div className="chips">{presets.map(([p, text]) => <button type="button" key={p} className="chip" aria-pressed={preset === p} onClick={() => choose(p)}>{text}</button>)}</div>
@@ -133,16 +148,19 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
           </fieldset>
           <fieldset>
             <legend>전략</legend>
-            <div className="options">
-              {strategies.map(([key, text]) => <label key={key} className="option">
-                <input type="radio" name="strategy" value={key} checked={config.strategy === key} onChange={() => setConfig({ ...config, strategy: key })} />
-                <span><strong>{labels[key]}</strong><small>{text}</small></span>
-              </label>)}
-            </div>
-            {config.strategy === "ma" && <label>이동평균 기간
-              <span className="input-unit"><input type="number" min={2} max={250} step={1} required value={config.ma_window}
-                onChange={(e) => setConfig({ ...config, ma_window: Number(e.target.value) })} /><span>일</span></span>
-            </label>}
+            <label><span className="sr-only">전략 선택</span>
+              <select value={config.strategy} onChange={(e) => setConfig({ ...config, strategy: e.target.value, params: {} })}>
+                {groups.map((g) => <optgroup key={g} label={g}>
+                  {catalog.filter((s) => s.group === g).map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </optgroup>)}
+              </select>
+            </label>
+            {selected && <p className="strategy-note">{selected.description}</p>}
+            {selected?.params.map((p) => <label key={p.key}>{p.label}
+              <input type="number" min={p.min} max={p.max} step={p.step} required
+                value={config.params?.[p.key] ?? (config.strategy === "ma" && p.key === "window" ? config.ma_window : p.default)}
+                onChange={(e) => setConfig({ ...config, params: { ...config.params, [p.key]: Number(e.target.value) } })} />
+            </label>)}
           </fieldset>
           <label>시작 자금
             <span className="input-unit"><input type="number" min={1000} max={1e10} step={1000} required value={config.capital}
@@ -160,10 +178,14 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
             ? <div className="run-row"><button type="button" className="btn btn-primary" disabled><span className="spinner light" />{states[job!.status]}…</button>
               <button type="button" className="btn btn-secondary" onClick={cancel}>취소</button></div>
             : <button type="submit" className="btn btn-primary"><Play size={16} />백테스트 실행</button>}
+          <button type="button" className="btn btn-secondary" onClick={compareAll} disabled={comparing || running}>
+            {comparing ? <><span className="spinner" />모든 전략 계산 중…</> : <><ListOrdered size={16} />모든 전략 비교</>}
+          </button>
           <p className="caption">실제 주문 없이 과거 일봉으로 모의 매매합니다. 신호는 다음 거래일 시가에 체결합니다.</p>
         </form>
         <div className="output">
           {error && <div ref={errorRef} tabIndex={-1} className="notice error" role="alert">{error}</div>}
+          {compare && <CompareTable rows={compare} busy={running} onDetail={detail} onClose={() => setCompare(null)} />}
           {running && <div className="notice" role="status"><span className="spinner" /> 계산 중입니다. 끝나면 결과가 여기에 바로 나타납니다.</div>}
           {result ? <ResultView key={result.id} result={result} /> : !running && <div className="empty">
             <LineChart size={28} />

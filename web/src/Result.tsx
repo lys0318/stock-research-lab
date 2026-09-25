@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import { Download, LocateFixed } from "lucide-react";
-import { labels, pct, roundTrips, tone, won, type Result } from "./api";
+import { pct, roundTrips, strategyName, tone, won, type Result } from "./api";
 
 const PriceChart = lazy(() => import("./ResearchCharts").then((m) => ({ default: m.PriceChart })));
 const EquityChart = lazy(() => import("./ResearchCharts").then((m) => ({ default: m.EquityChart })));
@@ -25,7 +25,7 @@ export default function ResultView({ result }: { result: Result }) {
     <div className="summary">
       <p>{won(c.capital)}원으로 {c.start}에 시작했다면</p>
       <div className="summary-value"><strong>{won(m.final_equity)}원</strong><span className={tone(m.total_return)}>{pct(m.total_return)}</span></div>
-      <p>{c.end} 기준 · {labels[c.strategy]}{c.strategy === "ma" ? ` ${c.ma_window}일` : ""}</p>
+      <p>{c.end} 기준 · {strategyName(c, result.strategy_params)}</p>
     </div>
     <div className="metrics">
       {hold !== null && <div><span>그냥 보유했다면</span><strong className={tone(hold)}>{pct(hold)}</strong><small>비용 제외</small></div>}
@@ -36,7 +36,7 @@ export default function ResultView({ result }: { result: Result }) {
     {result.dataset.synthetic && <p className="notice">개발용 가상 데이터로 계산한 결과입니다. 실제 주식의 성과가 아닙니다.</p>}
     {Date.now() - Date.parse(result.created_at) > 30 * 86400000 && <p className="notice">30일 전에 만든 결과입니다. 최신 시세를 반영하지 않습니다.</p>}
     <Suspense fallback={<p role="status" className="muted">차트를 불러오는 중…</p>}>
-      <PriceChart prices={prices} trades={result.trades} focus={focus} label={`${result.dataset.name} 주가와 매수·매도 시점`} />
+      <PriceChart prices={prices} trades={result.trades} marks={result.marks} focus={focus} label={`${result.dataset.name} 주가와 매수·매도 시점`} />
       <EquityChart result={result} />
     </Suspense>
     {result.prediction && <p className="caption">AI 방향 예측 평가: 정확도 {(result.prediction.accuracy * 100).toFixed(1)}% · Brier 점수 {result.prediction.brier.toFixed(3)} (0.25보다 낮을수록 동전 던지기보다 나음) · 기준 확률 {result.prediction.threshold}</p>}

@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight, LineChart, Search } from "lucide-react";
-import { api, labels, nameHints, pct, publicMode, states, tone, type Dataset, type Job, type StockHit } from "./api";
+import { api, nameHints, pct, publicMode, states, strategyName, tone, type Dataset, type Job, type StockHit } from "./api";
 
 export function JobCard({ job, datasets, onOpen }: { job: Job; datasets: Dataset[]; onOpen: (job: Job) => void }) {
   const d = datasets.find((x) => x.id === job.config.dataset_id);
   const done = job.status === "completed";
-  return <button className="card" onClick={() => onOpen(job)} disabled={!done} aria-label={`${d?.name ?? "종목"} ${labels[job.config.strategy]} 결과 ${done ? "열기" : states[job.status]}`}>
+  return <button className="card" onClick={() => onOpen(job)} disabled={!done} aria-label={`${d?.name ?? "종목"} ${strategyName(job.config)} 결과 ${done ? "열기" : states[job.status]}`}>
     <span className="card-icon"><LineChart size={18} /></span>
-    <strong>{d?.name ?? "종목"} · {labels[job.config.strategy]}</strong>
+    <strong>{d?.name ?? "종목"} · {strategyName(job.config)}</strong>
     <span className="card-value">
       {done && job.metrics ? <span className={tone(job.metrics.total_return)}>{pct(job.metrics.total_return)}</span> : <span className={"badge " + job.status}>{states[job.status]}</span>}
     </span>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Plotly from "plotly.js-finance-dist-min";
 import type { Annotations, Data, Layout, PlotlyHTMLElement, RangeSlider, Shape } from "plotly.js";
-import type { Band, Point, Price, Result, Trade } from "./api";
+import type { Band, Mark, Point, Price, Result, Trade } from "./api";
 
 const up = "#e5383b", down = "#2563eb", ink = "#0d0d0d", grid = "#efefef";
 const maColors: Record<number, string> = { 5: "#f59f00", 20: "#12b886", 60: "#7048e8", 120: "#868e96" };
@@ -11,7 +11,7 @@ const base: Partial<Layout> = {
   font: { family: "Pretendard, sans-serif", color: "#5d5d5d", size: 12 },
   margin: { l: 60, r: 12, t: 56, b: 32 },
   legend: { orientation: "h", x: 0, y: 1.1, font: { size: 11 } },
-  hovermode: "closest", dragmode: "zoom",
+  hovermode: "closest", dragmode: "pan",
   hoverlabel: { bgcolor: "#ffffff", bordercolor: "#e8e8e8", font: { color: ink, family: "Pretendard, sans-serif" } },
   modebar: { bgcolor: "transparent", color: "#8f8f8f", activecolor: ink },
 };
@@ -27,7 +27,7 @@ function Plot({ traces, layout, label, autoY }: { traces: Data[]; layout: Partia
     let graph: PlotlyHTMLElement | undefined;
     setError("");
     Plotly.react(el, traces, { ...base, ...layout }, {
-      responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: false,
+      responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: true,
       modeBarButtonsToRemove: ["select2d", "lasso2d"],
       toImageButtonOptions: { format: "png", filename: "stock-research-chart", scale: 2, width: 1280, height: 650 },
     }).then((rendered) => {
@@ -72,8 +72,8 @@ const kinds: [Kind, string][] = [["candlestick", "캔들"], ["ohlc", "OHLC 막�
 
 export type Scenario = { label: string; path: Point[]; rising: boolean };
 
-export function PriceChart({ prices, trades = [], path, band, scenarios, focus = null, label }: {
-  prices: Price[]; trades?: Trade[]; path?: Point[]; band?: Band[]; scenarios?: Scenario[]; focus?: number | null; label: string;
+export function PriceChart({ prices, trades = [], path, band, scenarios, marks, focus = null, label }: {
+  prices: Price[]; trades?: Trade[]; path?: Point[]; band?: Band[]; scenarios?: Scenario[]; marks?: Mark[]; focus?: number | null; label: string;
 }) {
   const [kind, setKind] = useState<Kind>("candlestick");
   const [mas, setMas] = useState<number[]>([20, 60]);
@@ -120,6 +120,11 @@ export function PriceChart({ prices, trades = [], path, band, scenarios, focus =
       marker: { symbol: "circle-open", size: 24, color: ink, line: { width: 2 } }, hoverinfo: "skip" });
     const shapes: Partial<Shape>[] = [];
     const annotations: Partial<Annotations>[] = [];
+    for (const m of marks || []) {
+      if (m.kind === "line") shapes.push({ type: "line", xref: "x", yref: "y", x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1, line: { color: "#5d5d5d", width: 1.5, dash: "dash" } });
+      else annotations.push({ x: m.date, y: m.price, text: m.text, showarrow: true, arrowhead: 0, arrowcolor: "#8f8f8f", ax: 0,
+        ay: m.text.startsWith("천장") ? -28 : 28, font: { size: 11, color: ink }, bgcolor: "rgba(255,255,255,.9)", borderpad: 2 });
+    }
     if (bands?.length && last) {
       // Each range is an upper edge followed by a lower edge filled back to it ("tonexty"), starting at today's close.
       const x = [last.date, ...bands.map((b) => b.date)];
@@ -175,11 +180,11 @@ export function PriceChart({ prices, trades = [], path, band, scenarios, focus =
         ], x: 0, y: 1.02, yanchor: "bottom", bgcolor: "#f0f0f0", activecolor: "#dcdcdc", font: { size: 11 } },
         rangebreaks: [{ bounds: ["sat", "mon"] }, { values: closedWeekdays([...dates, ...(path || []).map((p) => p.date)]) }],
       },
-      yaxis: { domain: [.28, 1], range: autoY((d) => d >= range[0] && d <= range[1]) ?? undefined, gridcolor: grid, tickformat: ",.0f", fixedrange: false },
-      yaxis2: { domain: [0, .17], gridcolor: grid, tickformat: ".2s", fixedrange: false },
+      yaxis: { domain: [.28, 1], range: autoY((d) => d >= range[0] && d <= range[1]) ?? undefined, gridcolor: grid, tickformat: ",.0f", fixedrange: true },
+      yaxis2: { domain: [0, .17], gridcolor: grid, tickformat: ".2s", fixedrange: true },
     };
     return { traces, layout, autoY };
-  }, [prices, trades, path, bands, lines, selected, focus, kind, mas, label]);
+  }, [prices, trades, path, bands, lines, marks, selected, focus, kind, mas, label]);
   if (!prices.length) return <p className="notice">이 저장 결과에는 일봉이 포함되어 있지 않습니다. 같은 조건으로 다시 실행하면 주가 차트를 볼 수 있습니다.</p>;
   return <div className="chart" id="price-chart">
     <div className="chart-tools">
@@ -198,7 +203,8 @@ export function PriceChart({ prices, trades = [], path, band, scenarios, focus =
     <Plot traces={traces} layout={layout} autoY={autoY} label={label} />
     <p className="caption chart-key">
       {trades.length > 0 && <><span className="up">▲ 매수</span> <span className="down">▼ 매도</span> · </>}
-      {path?.length ? "점선은 중앙 예측 · " : ""}{band ? "음영은 50%·80% 예측 범위 · " : ""}{scenarios ? "가는 선은 비슷한 과거 차트 이후 흐름 · " : ""}캔들은 상승 빨강 / 하락 파랑 · 주말·휴장일 제외 · 드래그로 확대, 더블 클릭으로 초기화
+      {marks?.length ? "회색 점선은 헤드 앤 숄더 넥라인 · " : ""}
+      {path?.length ? "점선은 중앙 예측 · " : ""}{band ? "음영은 50%·80% 예측 범위 · " : ""}{scenarios ? "가는 선은 비슷한 과거 차트 이후 흐름 · " : ""}캔들은 상승 빨강 / 하락 파랑 · 주말·휴장일 제외 · 휠로 확대·축소, 드래그로 이동, 더블 클릭으로 초기화
     </p>
   </div>;
 }
@@ -213,7 +219,7 @@ export function EquityChart({ result }: { result: Result }) {
       hovertemplate: mode === "equity" ? "%{x}<br>%{y:,.0f}원<extra></extra>" : "%{x}<br>낙폭 %{y:.2%}<extra></extra>",
     }] as Data[],
     layout: { height: 260, showlegend: false, margin: { l: 60, r: 12, t: 12, b: 32 }, xaxis: { showgrid: false, tickformat: "%Y-%m" },
-      yaxis: { gridcolor: grid, tickformat: mode === "equity" ? ",.0f" : ".0%" } } as Partial<Layout>,
+      yaxis: { gridcolor: grid, tickformat: mode === "equity" ? ",.0f" : ".0%", fixedrange: true } } as Partial<Layout>,
   }), [result, mode]);
   return <div className="chart">
     <div className="chart-tools">

@@ -1,26 +1,55 @@
-import { Cloud as CloudIcon, LineChart } from "lucide-react";
-import { api, labels, pct, publicMode, states, tone, type Benchmark, type Dataset, type Job } from "./api";
+import { useState } from "react";
+import { Cloud as CloudIcon, LineChart, Trash2 } from "lucide-react";
+import { api, pct, publicMode, states, strategyName, tone, type Benchmark, type Dataset, type Job } from "./api";
 
 export function History({ jobs, datasets, onOpen, onChanged, onError }: {
   jobs: Job[]; datasets: Dataset[]; onOpen: (job: Job) => void; onChanged: () => void; onError: (message: string) => void;
 }) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const visible = new Set(jobs.map((j) => j.id));
+  const chosen = [...picked].filter((id) => visible.has(id));  // runs deleted elsewhere drop out
+  const toggle = (id: string) => setPicked((p) => { const next = new Set(p); next.has(id) ? next.delete(id) : next.add(id); return next; });
   async function cancel(job: Job) {
     try { await api(`/runs/${job.id}/cancel`, { method: "POST" }); onChanged(); }
     catch (e) { onError((e as Error).message); }
   }
+  async function remove(ids: string[]) {
+    if (!ids.length || !confirm(`실험 ${ids.length}개를 삭제할까요? 결과 파일도 함께 지워지며 되돌릴 수 없습니다.`)) return;
+    setDeleting(true);
+    try {
+      for (const id of ids) await api(`/runs/${id}`, { method: "DELETE" });
+      setPicked((p) => new Set([...p].filter((id) => !ids.includes(id))));
+    } catch (e) { onError((e as Error).message); }
+    finally { setDeleting(false); onChanged(); }
+  }
   return <>
     <section className="page-title"><h1>실험 기록</h1><p className="muted">최근 100개 실험입니다. 완료된 실험을 열면 같은 조건으로 다시 실행할 수 있습니다.</p></section>
+    {!publicMode && jobs.length > 0 && <div className="section-row">
+      <span className="muted">{chosen.length ? `${chosen.length}개 선택됨` : "삭제할 실험을 고르세요"}</span>
+      <button className="btn btn-secondary btn-sm danger" disabled={!chosen.length || deleting} onClick={() => remove(chosen)}>
+        <Trash2 size={15} />{deleting ? "삭제 중…" : "선택 삭제"}</button>
+    </div>}
     {jobs.length ? <div className="table-wrap"><table>
-      <thead><tr><th>종목 · 전략</th><th>기간</th><th>상태</th><th>수익률</th><th><span className="sr-only">동작</span></th></tr></thead>
+      <thead><tr>
+        {!publicMode && <th><input type="checkbox" aria-label="모든 실험 선택" checked={chosen.length === jobs.length}
+          onChange={(e) => setPicked(e.target.checked ? new Set(jobs.map((j) => j.id)) : new Set())} /></th>}
+        <th>종목 · 전략</th><th>기간</th><th>상태</th><th>수익률</th><th><span className="sr-only">동작</span></th>
+      </tr></thead>
       <tbody>{jobs.map((j) => {
         const d = datasets.find((x) => x.id === j.config.dataset_id);
+        const name = `${d?.name ?? "종목"} · ${strategyName(j.config)}`;
         return <tr key={j.id}>
-          <td><strong>{d?.name ?? "종목"} · {labels[j.config.strategy]}</strong><small>{j.id.slice(0, 10)}{d?.synthetic ? " · 가상 데이터" : ""}</small></td>
+          {!publicMode && <td><input type="checkbox" aria-label={`${name} 선택`} checked={picked.has(j.id)} onChange={() => toggle(j.id)} /></td>}
+          <td><strong>{name}</strong><small>{j.id.slice(0, 10)}{d?.synthetic ? " · 가상 데이터" : ""}</small></td>
           <td>{j.config.start}<small>{j.config.end}</small></td>
           <td><span className={"badge " + j.status}>{states[j.status]}</span>{j.error && <small className="error-text">{j.error}</small>}</td>
           <td className={j.metrics ? tone(j.metrics.total_return) : ""}>{j.metrics ? pct(j.metrics.total_return) : "—"}</td>
-          <td>{j.status === "completed" ? <button className="btn btn-secondary btn-sm" onClick={() => onOpen(j)}>열기</button>
-            : !publicMode && ["queued", "running"].includes(j.status) ? <button className="btn btn-ghost btn-sm" onClick={() => cancel(j)}>취소</button> : null}</td>
+          <td className="row-actions">
+            {j.status === "completed" && <button className="btn btn-secondary btn-sm" onClick={() => onOpen(j)}>열기</button>}
+            {!publicMode && ["queued", "running"].includes(j.status) && <button className="btn btn-ghost btn-sm" onClick={() => cancel(j)}>취소</button>}
+            {!publicMode && <button className="btn btn-ghost btn-sm danger" disabled={deleting} aria-label={`${name} 삭제`} onClick={() => remove([j.id])}><Trash2 size={15} /></button>}
+          </td>
         </tr>;
       })}</tbody>
     </table></div> : <div className="empty"><LineChart size={28} /><h3>아직 실험이 없습니다</h3><p>새 분석에서 종목을 검색해 첫 백테스트를 실행하세요.</p></div>}
