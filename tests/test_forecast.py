@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from lab.data import demo, load_dataset
-from lab.forecast import forecast
+from lab.forecast import LABELS, forecast, rebased_windows, similar
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
@@ -38,3 +38,33 @@ def test_rejects_bad_horizon_and_short_data():
         forecast(f, 7)
     with pytest.raises(ValueError, match="부족"):
         forecast(f.tail(150).reset_index(drop=True), 5)
+
+def test_band_orders_and_widens():
+    f, _ = load_dataset(demo()["id"])
+    r = forecast(f, 20)
+    for b, p in zip(r["band"], r["path"]):
+        assert b["p10"] < b["p25"] < p["price"] < b["p75"] < b["p90"]
+    widths = [b["p90"] / b["p10"] for b in r["band"]]
+    assert widths == sorted(widths)
+    pr = r["probabilities"]
+    assert 0 <= pr["up10"] <= pr["up"] <= 1 and 0 <= pr["down10"] <= 1
+
+def test_drivers_sum_to_center():
+    f, _ = load_dataset(demo()["id"])
+    r = forecast(f, 20)
+    total = sum(d["contribution"] for d in r["drivers"]) + r["trend"]
+    assert total == pytest.approx(np.log(r["path"][-1]["price"] / r["last_close"]))
+    assert {d["key"] for d in r["drivers"]} == set(LABELS)
+
+def test_similar_charts_use_only_known_outcomes():
+    f, _ = load_dataset(demo()["id"])
+    picks = similar(rebased_windows(np.log(f.close.to_numpy())), 1500, 20)
+    ends = [j for j, _ in picks]
+    assert len(ends) == 5 and all(j + 20 < 1500 for j in ends)
+    assert all(abs(a - b) >= 20 for a in ends for b in ends if a != b)
+    r = forecast(f, 20)
+    assert len(r["analogs"]) == 5
+    assert all(len(a["path"]) == 20 and len(a["shape"]) == 81 for a in r["analogs"])
+    assert len(r["current_shape"]) == 61
+    e = r["evaluation"]
+    assert all(0 <= e[k] <= 1 for k in ("band80_cover", "band50_cover", "analog_hit_rate"))
