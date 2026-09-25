@@ -8,7 +8,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss
+from . import strategies
 from .data import load_dataset
+from .strategies import resolve, signals as rule_signals
 
 def features(frame):
     c = frame.close
@@ -76,14 +78,15 @@ def simulate(frame, signals, strategy, capital=1000000, fee=.00015, tax=0., slip
                            price=float(execution), costs=float(cost), cash=float(cash), phase=phase))
     for i, row in enumerate(frame.itertuples()):
         # Signals use ONLY the preceding closed bar. No same-close fills.
-        if strategy == "hold" and i == 0: trade(i, "buy", row.open)
-        elif strategy == "ma":
-            if i > 0 and signals[i-1] and qty == 0: trade(i, "buy", row.open)
-            elif i > 0 and not signals[i-1] and qty: trade(i, "sell", row.open)
+        if strategy == "hold":
+            if i == 0: trade(i, "buy", row.open)
         elif strategy == "model":
             if i > 0 and signals[i-1] and qty == 0 and i+4 < len(frame):
                 trade(i, "buy", row.open)
             if qty and i-entry_index == 4: trade(i, "sell", row.close, "close")
+        else:  # every chart rule: signals[t] is the hold state decided at t's close
+            if i > 0 and signals[i-1] and qty == 0: trade(i, "buy", row.open)
+            elif i > 0 and not signals[i-1] and qty: trade(i, "sell", row.open)
         if i == len(frame)-1 and qty: trade(i, "sell", row.close, "close")
         curve.append(dict(date=str(row.date), equity=float(cash+qty*row.close)))
     equity = np.array([capital]+[r["equity"] for r in curve])
@@ -99,18 +102,22 @@ def run(config):
     mask = (frame.date >= config["start"]) & (frame.date <= config["end"])
     if config["start"] < meta["start"] or config["end"] > meta["end"] or mask.sum() < 10:
         raise ValueError("선택 기간이 확보 데이터 범위를 벗어나거나 너무 짧습니다.")
-    signals, scores = np.zeros(len(frame), dtype=bool), None
+    signals, scores, params, marks = np.zeros(len(frame), dtype=bool), None, {}, []
     strategy = config["strategy"]
     if strategy == "model":
         signals, scores = model_signals(frame, config["start"], config["end"], config.get("seed",42))
-    elif strategy == "ma":
-        signals = (frame.close > frame.close.rolling(config.get("ma_window",20)).mean()).to_numpy()
+    elif strategy != "hold":
+        params = resolve(strategy, config.get("params") or {}, config.get("ma_window",20))
+        signals, marks = rule_signals(frame, strategy, params)
     selected = frame.loc[mask].reset_index(drop=True)
+    first, last = selected.date.iloc[0], selected.date.iloc[-1]
+    marks = [dict(m, x0=max(m["x0"], first)) if m["kind"] == "line" else m for m in marks
+             if first <= (m["x1"] if m["kind"] == "line" else m["date"]) <= last]
     result = simulate(selected, signals[mask], strategy, config.get("capital",1000000),
                       config.get("fee",.00015),config.get("tax",0.),config.get("slippage",.0005))
-    result.update(config=config, dataset=meta, prediction=scores,
+    result.update(config=config, dataset=meta, prediction=scores, strategy_params=params, marks=marks,
         prices=selected.to_dict(orient="records"),
-        code_version=hashlib.sha256(inspect.getsource(inspect.getmodule(run)).encode()).hexdigest()[:16],
+        code_version=hashlib.sha256((inspect.getsource(inspect.getmodule(run))+inspect.getsource(strategies)).encode()).hexdigest()[:16],
         created_at=datetime.now(timezone.utc).isoformat(), compute_seconds=time.perf_counter()-began,
         environment=dict(python=__import__("platform").python_version(), platform=__import__("platform").platform()),
         assumptions=["단일 종목 현금 매수", "종료일 종가 청산", "세금은 사용자가 입력한 고정 모형", "현재 선정 종목에 한정된 연구"])
