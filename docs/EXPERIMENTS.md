@@ -15,6 +15,21 @@ python -m lab.benchmark examples/manifest.json --workers 1 2 4 --repeats 3
 예시 dataset_id를 실제 로컬 버전으로 교체한다.
 동일 입력별 metrics/curve를 비교하고 불일치 시 실험 실패. 기록은 data/benchmarks.
 
+### 로컬 실측 (2026-10-10)
+환경: HP OMEN 15 노트북, Intel Core i7-14650HX(성능 8 + 효율 8코어, 24스레드), 32GB, NVMe SSD, Windows 11, Python 3.12.
+작업: 실제 4종목(005930·000660·035420·035720) × 전략 설정 31가지 × 평가 기간 5개 = 620건, 작업자 1·2·4·8·16 × 3회. 모든 조건에서 결과 일치.
+
+| 작업자 | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| 개선 전 평균(초) | 193.1 | 107.9 | 96.5 | 100.8 | 109.1 |
+| 개선 후 평균(초) | 61.9 | 15.8 | 18.5 | 13.8 | 23.3 |
+| 개선 후 건당 계산(ms) | 92 | 29 | 93 | 115 | 254 |
+
+- 병목 1: `pd.read_parquet`가 3,000행 파일에도 약 0.1초(데이터셋 처리 경로). `ParquetFile.read`로 약 3ms.
+- 병목 2: 작업마다 `threadpool_limits` 호출, 작업자 16개에서 0.02초 → 0.16초. 작업자 프로세스당 1회로 변경.
+- 개선 후에도 작업자 8개가 최고(작업자 1개 대비 4.5배), 16개는 건당 시간이 늘어 더 느림. 성능·효율 코어 혼합과 전력 관리로 같은 조건 반복도 12~22초로 흔들림. 작업자 프로세스 준비·정리는 실행마다 3~10초.
+- 기록: data/benchmarks/d5b678cfa51f419fa2b834b029eb84d1.json(개선 전), f5c53d348c5c4de0a35204c1c3762abd.json(개선 후).
+
 ## AWS
 infra/README.md의 스택·이미지 준비 후 python -m lab.cloud experiment를 명시적으로 실행한다.
 각 작업의 Batch createdAt/startedAt/stoppedAt과 내부 계산 시작·종료를 저장.

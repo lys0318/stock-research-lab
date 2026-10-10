@@ -10,7 +10,8 @@ import boto3
 from .data import root, load_dataset
 
 def worker():
-    from .benchmark import measured
+    from .benchmark import measured, single_thread
+    single_thread()
     s3=boto3.client("s3")
     bucket=os.environ["LAB_BUCKET"];prefix=os.environ["LAB_PREFIX"]
     index=int(os.environ["LAB_GROUP"])

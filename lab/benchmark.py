@@ -8,11 +8,14 @@ from pathlib import Path
 from .data import root
 from .engine import run
 
+def single_thread():
+    """Pin numeric libraries to one thread for the whole process. Per-backtest limits cost ~0.15s each at 16 workers."""
+    from threadpoolctl import threadpool_limits
+    threadpool_limits(limits=1)
+
 def measured(config):
     start=time.time()
-    from threadpoolctl import threadpool_limits
-    with threadpool_limits(limits=1):
-        result=run(config)
+    result=run(config)
     return dict(started_at=start,finished_at=time.time(),metrics=result["metrics"],curve=result["curve"],code_version=result["code_version"])
 
 def concurrency(records):
@@ -29,7 +32,7 @@ def benchmark(configs,workers,repeats=3):
     for w in workers:
         for repeat in range(repeats):
             began=time.time()
-            with ProcessPoolExecutor(max_workers=w) as pool:
+            with ProcessPoolExecutor(max_workers=w,initializer=single_thread) as pool:
                 records=list(pool.map(measured,configs))
             elapsed=time.time()-began
             signature=[dict(metrics=r["metrics"],curve=r["curve"]) for r in records]
