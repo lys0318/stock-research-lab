@@ -1,7 +1,9 @@
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
+from functools import cache
 import json
+import platform
 import time
 import uuid
 from pathlib import Path
@@ -13,10 +15,20 @@ def single_thread():
     from threadpoolctl import threadpool_limits
     threadpool_limits(limits=1)
 
+@cache
+def cpu_model():
+    """CPU name for reports: /proc/cpuinfo on Linux (Fargate assigns it), platform string elsewhere."""
+    try:
+        with open("/proc/cpuinfo",encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("model name"): return line.split(":",1)[1].strip()
+    except OSError: pass
+    return platform.processor()
+
 def measured(config):
     start=time.time()
     result=run(config)
-    return dict(started_at=start,finished_at=time.time(),metrics=result["metrics"],curve=result["curve"],code_version=result["code_version"])
+    return dict(started_at=start,finished_at=time.time(),metrics=result["metrics"],curve=result["curve"],code_version=result["code_version"],cpu=cpu_model())
 
 def concurrency(records):
     events=[]
@@ -42,7 +54,7 @@ def benchmark(configs,workers,repeats=3):
                 throughput=len(configs)/elapsed,completed=len(records),failed=0,
                 observed_concurrency=concurrency(records),equal_results=True,
                 estimated_compute_cost=None,records=[{k:r[k] for k in ["started_at","finished_at"]} for r in records]))
-    output=dict(id=uuid.uuid4().hex,environment="local",created_at=datetime.now(timezone.utc).isoformat(),
+    output=dict(id=uuid.uuid4().hex,environment="local",cpu=cpu_model(),created_at=datetime.now(timezone.utc).isoformat(),
         dataset_ids=sorted(set(c["dataset_id"] for c in configs)),runs=reports,
         cost_note="로컬 측정입니다. AWS 비용 또는 성능으로 해석할 수 없습니다.")
     folder=root()/"benchmarks";folder.mkdir(exist_ok=True)
@@ -55,8 +67,8 @@ def main():
     p.add_argument("--repeats",type=int,default=3)
     a=p.parse_args()
     configs=json.loads(Path(a.manifest).read_text(encoding="utf-8"))
-    if not isinstance(configs,list) or not 1<=len(configs)<=1000 or any(w not in [1,2,4] for w in a.workers) or not 1<=a.repeats<=3:
-        p.error("작업 1~1000개, 작업자 1/2/4, 반복 1~3회")
+    if not isinstance(configs,list) or not 1<=len(configs)<=10000 or any(not 1<=w<=64 for w in a.workers) or not 1<=a.repeats<=3:
+        p.error("작업 1~10000개, 작업자 1~64, 반복 1~3회")
     from .api import RunConfig
     configs=[RunConfig.model_validate(c).model_dump(mode="json") for c in configs]
     print(json.dumps(benchmark(configs,a.workers,a.repeats),ensure_ascii=False,indent=2))

@@ -31,7 +31,7 @@ def worker():
 def experiment(args):
     from .api import RunConfig
     configs=[RunConfig.model_validate(c).model_dump(mode="json") for c in json.loads(Path(args.manifest).read_text(encoding="utf-8"))]
-    if not 1<=len(configs)<=1000: raise ValueError("작업 수는 1~1000")
+    if not 1<=len(configs)<=10000: raise ValueError("작업 수는 1~10000")  # ponytail: records keep full equity curves (~35KB/job); compact them before going past 10k
     groups=[configs[i::args.workers] for i in range(args.workers)]
     groups=[g for g in groups if g]
     identifier=uuid.uuid4().hex;prefix="experiments/"+identifier
@@ -50,7 +50,7 @@ def experiment(args):
                 containerOverrides={"environment":[{"name":"LAB_BUCKET","value":args.bucket},{"name":"LAB_PREFIX","value":prefix},{"name":"LAB_GROUP","value":str(i)}]})
             ids.append(response["jobId"])
         while True:
-            jobs=batch.describe_jobs(jobs=ids)["jobs"]
+            jobs=[j for k in range(0,len(ids),100) for j in batch.describe_jobs(jobs=ids[k:k+100])["jobs"]]  # API takes at most 100 ids
             if any(j["status"]=="FAILED" for j in jobs): raise RuntimeError("AWS 작업 실패. CloudWatch 로그를 확인하세요.")
             if len(jobs)==len(ids) and all(j["status"]=="SUCCEEDED" for j in jobs): break
             if time.time()-began>args.timeout+300: raise TimeoutError("제출 이후 대기·실행 제한 초과")
@@ -65,7 +65,7 @@ def experiment(args):
             runs=[dict(workers=args.workers,total_seconds=duration,throughput=len(configs)/duration,completed=len(records),
                 failed=0,observed_concurrency=concurrency(records),equal_results=None,estimated_compute_cost=None)],
             jobs=[{k:j.get(k) for k in ["jobId","status","createdAt","startedAt","stoppedAt"]} for j in jobs],
-            records=records,cost_note="비용은 미산정. 리전별 단가와 청구 내역을 대조해야 합니다.",
+            cpus=sorted({r.get("cpu","") for r in records}),records=records,cost_note="비용은 미산정. 리전별 단가와 청구 내역을 대조해야 합니다.",
             prefix=prefix,bucket=args.bucket)
         folder=root()/"benchmarks";folder.mkdir(exist_ok=True)
         (folder/(identifier+".json")).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -80,12 +80,12 @@ def experiment(args):
 def main():
     p=argparse.ArgumentParser();p.add_argument("command",choices=["worker","experiment"])
     p.add_argument("--manifest");p.add_argument("--bucket");p.add_argument("--queue");p.add_argument("--definition")
-    p.add_argument("--region",default="ap-northeast-2");p.add_argument("--workers",type=int,choices=[1,2,4],default=1)
+    p.add_argument("--region",default="ap-northeast-2");p.add_argument("--workers",type=int,default=1)
     p.add_argument("--timeout",type=int,default=600)
     a=p.parse_args()
     if a.command=="worker": worker();return
-    if not all([a.manifest,a.bucket,a.queue,a.definition]) or not 60<=a.timeout<=1800:
-        p.error("manifest/bucket/queue/definition 필요, timeout 60~1800초")
+    if not all([a.manifest,a.bucket,a.queue,a.definition]) or not 60<=a.timeout<=1800 or not 1<=a.workers<=256:
+        p.error("manifest/bucket/queue/definition 필요, timeout 60~1800초, workers 1~256(스택 MaxvCpus·계정 Fargate 한도 이하)")
     print(json.dumps(experiment(a),ensure_ascii=False,indent=2))
 
 if __name__=="__main__":main()

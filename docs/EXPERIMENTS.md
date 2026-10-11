@@ -11,7 +11,7 @@
 조건별 반복 3회. 예산 때문에 축소 시 실제 조건을 보고서에 기재한다.
 
 ## 로컬
-python -m lab.benchmark examples/manifest.json --workers 1 2 4 --repeats 3
+python -m lab.benchmark examples/manifest.json --workers 1 2 4 8 16 --repeats 3   (작업자 1~64, 작업 최대 1만 건)
 예시 dataset_id를 실제 로컬 버전으로 교체한다.
 동일 입력별 metrics/curve를 비교하고 불일치 시 실험 실패. 기록은 data/benchmarks.
 
@@ -93,7 +93,7 @@ AWS 실행 전에 예산 범위를 확인하기 위한 추정이다. 실제 실�
 
 **비용을 키우는 요인**
 - NAT 게이트웨이: 상시 과금이므로 템플릿에서 쓰지 않는다(public subnet + 공인 IP).
-- 멈춘 작업: 작업 제한 시간 기본 600초, 최대 vCPU 4로 최악의 경우도 제한된다.
+- 멈춘 작업: 작업 제한 시간 기본 600초, 동시 vCPU는 스택의 MaxvCpus(기본 4)로 최악의 경우도 제한된다. 64·256 같은 확대 시나리오는 계정 Fargate 한도(기본 6 vCPU) 상향과 MaxvCpus 변경이 먼저 필요하다.
 - 로그 과다 출력, 사용하지 않는 ECR 이미지·S3 버킷 방치.
 - 예산 알림(기본 월 15달러)은 알림일 뿐 자동 차단이 아니다.
 

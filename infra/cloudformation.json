@@ -20,6 +20,13 @@
       "Default": 15,
       "MinValue": 1,
       "MaxValue": 20
+    },
+    "MaxvCpus": {
+      "Type": "Number",
+      "Default": 4,
+      "MinValue": 1,
+      "MaxValue": 256,
+      "Description": "Concurrent Fargate vCPUs (= workers at 1 vCPU each). Raise only after the account's Fargate On-Demand vCPU quota allows it."
     }
   },
   "Resources": {
@@ -145,7 +152,9 @@
         "State": "ENABLED",
         "ComputeResources": {
           "Type": "FARGATE",
-          "MaxvCpus": 4,
+          "MaxvCpus": {
+            "Ref": "MaxvCpus"
+          },
           "Subnets": {
             "Ref": "PublicSubnets"
           },

@@ -76,3 +76,4 @@ def test_parallel_matches():
     configs=[dict(dataset_id=meta["id"],start="2024-01-01",end="2025-12-31",strategy=s) for s in ["hold","ma"]]
     result=benchmark(configs,[1,2],1)
     assert all(r["equal_results"] for r in result["runs"])
+    assert result["cpu"]  # the CPU the benchmark ran on is part of the record
