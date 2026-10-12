@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, LineChart, ListOrdered, Play, Sparkles } from "lucide-react";
-import { api, nameHints, publicMode, states, type CompareRow, type Config, type Dataset, type Job, type Result, type StrategyInfo } from "./api";
-import CompareTable from "./Compare";
+import { api, nameHints, publicMode, states, type CompareRow, type Config, type Dataset, type GridResult, type Job, type Result, type StrategyInfo } from "./api";
+import RankTable from "./Compare";
 import ResultView from "./Result";
 import ForecastView from "./Forecast";
 
@@ -19,6 +19,8 @@ function period(d: Dataset, preset: Preset, c: Config) {
   return { start: start < d.start ? d.start : start, end: d.end };
 }
 const percentInput = (v: number) => +(v * 100).toFixed(4);
+const GRID_LIMIT = 200;
+const candidates = (text: string) => text.split(/[\s,]+/).filter(Boolean).map(Number);
 
 export default function Workspace({ symbol, initial, onChanged, onBack }: {
   symbol: string; initial?: Result; onChanged: () => void; onBack: () => void;
@@ -37,6 +39,10 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
   const [catalog, setCatalog] = useState<StrategyInfo[]>([]);
   const [compare, setCompare] = useState<CompareRow[] | null>(null);
   const [comparing, setComparing] = useState(false);
+  const [gridOpen, setGridOpen] = useState(false);
+  const [gridText, setGridText] = useState<Record<string, string>>({});
+  const [grid, setGrid] = useState<GridResult | null>(null);
+  const [gridding, setGridding] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
   const running = !!job && ["queued", "running"].includes(job.status);
 
@@ -90,15 +96,35 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
     setError("");
     setComparing(true);
     try {
-      const { dataset_id, start: from, end, capital, fee, tax, slippage } = config;
-      setCompare(await api<CompareRow[]>("/compare", { method: "POST", body: JSON.stringify({ dataset_id, start: from, end, capital, fee, tax, slippage }) }));
+      setCompare(await api<CompareRow[]>("/compare", { method: "POST", body: JSON.stringify(periodBody()) }));
     } catch (err) { setError((err as Error).message); }
     finally { setComparing(false); }
   }
-  function detail(strategy: string) {
-    const cfg = { ...config, strategy, params: {} };
+  function detail(strategy: string, params: Record<string, number> = {}) {
+    const cfg = { ...config, strategy, params };
     setConfig(cfg);
     void start(cfg);
+  }
+  const periodBody = () => { const { dataset_id, start: from, end, capital, fee, tax, slippage } = config; return { dataset_id, start: from, end, capital, fee, tax, slippage }; };
+  async function runGrid() {
+    setError("");
+    setGridding(true);
+    try { setGrid(await api<GridResult>("/grid", { method: "POST", body: JSON.stringify({ ...periodBody(), strategy: config.strategy, grid: gridSpec }) })); }
+    catch (err) { setError((err as Error).message); }
+    finally { setGridding(false); }
+  }
+  async function downloadManifest() {
+    setError("");
+    try {
+      const { configs, skipped } = await api<{ configs: unknown[]; skipped: number }>("/grid/manifest", { method: "POST", body: JSON.stringify({ ...periodBody(), strategy: config.strategy, grid: gridSpec }) });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(configs, null, 1)], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `manifest-${symbol}-${config.strategy}-${configs.length}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (skipped) setError(`규칙에 맞지 않는 조합 ${skipped}개는 작업 목록에서 뺐습니다.`);
+    } catch (err) { setError((err as Error).message); }
   }
   async function cancel() {
     if (!job) return;
@@ -106,6 +132,11 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
     catch (err) { setError((err as Error).message); }
   }
   const selected = catalog.find((s) => s.key === config.strategy);
+  const current = (key: string, fallback: number) => config.params?.[key] ?? (config.strategy === "ma" && key === "window" ? config.ma_window : fallback);
+  const gridSpec = Object.fromEntries((selected?.params ?? []).map((p) => [p.key, candidates(gridText[p.key] ?? String(current(p.key, p.default)))]));
+  const gridBad = Object.values(gridSpec).some((v) => !v.length || v.some((n) => !Number.isFinite(n)));
+  const gridCount = Object.values(gridSpec).reduce((n, v) => n * new Set(v).size, 1);
+  const paramText = (params: Record<string, number>) => (selected?.params ?? []).map((p) => `${p.label.replace(/\(.*\)/, "")} ${params[p.key]}`).join(" · ");
   const name = dataset?.name ?? initial?.dataset.name ?? nameHints.get(symbol) ?? symbol;
   const field = (key: "fee" | "tax" | "slippage", label: string, hint: string) => <label>
     {label}
@@ -149,7 +180,7 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
           <fieldset>
             <legend>전략</legend>
             <label><span className="sr-only">전략 선택</span>
-              <select value={config.strategy} onChange={(e) => setConfig({ ...config, strategy: e.target.value, params: {} })}>
+              <select value={config.strategy} onChange={(e) => { setConfig({ ...config, strategy: e.target.value, params: {} }); setGridText({}); setGrid(null); }}>
                 {groups.map((g) => <optgroup key={g} label={g}>
                   {catalog.filter((s) => s.group === g).map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
                 </optgroup>)}
@@ -158,9 +189,28 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
             {selected && <p className="strategy-note">{selected.description}</p>}
             {selected?.params.map((p) => <label key={p.key}>{p.label}
               <input type="number" min={p.min} max={p.max} step={p.step} required
-                value={config.params?.[p.key] ?? (config.strategy === "ma" && p.key === "window" ? config.ma_window : p.default)}
+                value={current(p.key, p.default)}
                 onChange={(e) => setConfig({ ...config, params: { ...config.params, [p.key]: Number(e.target.value) } })} />
             </label>)}
+            {!!selected?.params.length && <>
+              <button type="button" className="disclosure" aria-expanded={gridOpen} onClick={() => setGridOpen(!gridOpen)}>
+                설정값 조합 실험 <ChevronDown size={16} />
+              </button>
+              {gridOpen && <div className="advanced">
+                {selected.params.map((p) => <label key={p.key}>{p.label} 후보
+                  <input type="text" inputMode="decimal" placeholder="예: 5, 10, 20" value={gridText[p.key] ?? String(current(p.key, p.default))}
+                    onChange={(e) => setGridText({ ...gridText, [p.key]: e.target.value })} />
+                </label>)}
+                <small className={gridBad || gridCount > GRID_LIMIT ? "error-text" : ""}>
+                  {gridBad ? "숫자를 쉼표로 구분해 넣으세요." : `${gridCount.toLocaleString("ko-KR")}개 조합 · 화면 실행은 ${GRID_LIMIT}개까지, 더 크면 작업 목록을 받아 벤치마크·클라우드로 실행`}
+                </small>
+                <div className="run-row">
+                  <button type="button" className="btn btn-secondary" onClick={runGrid} disabled={gridBad || gridCount > GRID_LIMIT || gridding || running}>
+                    {gridding ? <><span className="spinner" />계산 중…</> : "조합 실행"}</button>
+                  <button type="button" className="btn btn-ghost" onClick={downloadManifest} disabled={gridBad}>작업 목록 받기</button>
+                </div>
+              </div>}
+            </>}
           </fieldset>
           <label>시작 자금
             <span className="input-unit"><input type="number" min={1000} max={1e10} step={1000} required value={config.capital}
@@ -185,7 +235,13 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
         </form>
         <div className="output">
           {error && <div ref={errorRef} tabIndex={-1} className="notice error" role="alert">{error}</div>}
-          {compare && <CompareTable rows={compare} busy={running} onDetail={detail} onClose={() => setCompare(null)} />}
+          {grid && <RankTable title="설정값 조합 실험" busy={running} onClose={() => setGrid(null)}
+            rows={grid.rows.map((r) => ({ id: JSON.stringify(r.params), name: paramText(r.params), ...r }))}
+            onDetail={(id) => detail(config.strategy, JSON.parse(id))}
+            caption={`${grid.rows.length}개 조합${grid.skipped ? ` · 규칙에 맞지 않는 ${grid.skipped}개 제외(예: 단기선 ≥ 장기선)` : ""}. 같은 기간·자금·비용으로 계산했습니다. 여러 조합 중 가장 좋은 결과는 우연일 수 있으니, 다른 기간에서도 좋은지 확인하세요.`} />}
+          {compare && <RankTable title="전략 비교" busy={running} onClose={() => setCompare(null)} onDetail={(id) => detail(id)}
+            rows={compare.map((r) => ({ id: r.strategy, name: r.label, sub: r.group, baseline: r.strategy === "hold", ...r }))}
+            caption="같은 기간·자금·비용에서 각 전략의 기본 설정으로 계산했습니다. '자세히'를 누르면 그 전략으로 백테스트를 실행해 차트와 매매 기록을 보여줍니다." />}
           {running && <div className="notice" role="status"><span className="spinner" /> 계산 중입니다. 끝나면 결과가 여기에 바로 나타납니다.</div>}
           {result ? <ResultView key={result.id} result={result} /> : !running && <div className="empty">
             <LineChart size={28} />

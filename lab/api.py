@@ -122,21 +122,69 @@ def strategy_catalog():
     from .strategies import catalog
     return catalog()
 
+def summarize(config):
+    """Metrics, round-trip count and win rate of one backtest, or why it could not run."""
+    from .engine import round_trips, run
+    try:
+        pnl = round_trips((result := run(config))["trades"])
+        return dict(metrics=result["metrics"], trips=len(pnl), win_rate=sum(p > 0 for p in pnl)/len(pnl) if pnl else None, error=None)
+    except ValueError as e:
+        return dict(metrics=None, trips=0, win_rate=None, error=str(e))
+
 @app.post("/api/compare")
 def compare(period: Period):
     """Every strategy with default settings on one period. In-process: ~11 short backtests."""
-    from .engine import round_trips, run
     from .strategies import STRATEGIES
     check_range(period)
-    rows = []
-    for key, spec in STRATEGIES.items():
-        row = dict(strategy=key, label=spec["label"], group=spec["group"], metrics=None, trips=0, win_rate=None, error=None)
-        try:
-            pnl = round_trips((result := run(dict(period.model_dump(mode="json"), strategy=key)))["trades"])
-            row.update(metrics=result["metrics"], trips=len(pnl), win_rate=sum(p > 0 for p in pnl)/len(pnl) if pnl else None)
-        except ValueError as e: row["error"] = str(e)
-        rows.append(row)
-    return rows
+    return [dict(strategy=key, label=spec["label"], group=spec["group"], **summarize(dict(period.model_dump(mode="json"), strategy=key)))
+            for key, spec in STRATEGIES.items()]
+
+GRID_LIMIT, MANIFEST_LIMIT = 200, 50000  # in-process vs. a manifest for lab.benchmark / lab.cloud
+
+class Grid(Period):
+    strategy: str
+    grid: dict[str, list[float]] = Field(min_length=1, max_length=6)
+    @model_validator(mode="after")
+    def check_grid(self):
+        from .strategies import STRATEGIES
+        if self.strategy not in STRATEGIES: raise ValueError(f"알 수 없는 전략입니다: {self.strategy}")
+        unknown = set(self.grid) - set(STRATEGIES[self.strategy]["params"])
+        if unknown: raise ValueError(f"이 전략에 없는 설정입니다: {', '.join(sorted(unknown))}")
+        if not all(self.grid.values()): raise ValueError("설정값마다 후보를 하나 이상 넣으세요.")
+        if self.count() > MANIFEST_LIMIT: raise ValueError(f"조합 {self.count()}개는 한도 {MANIFEST_LIMIT}개를 넘습니다.")
+        return self
+    def count(self):
+        from math import prod
+        return prod(len(set(v)) for v in self.grid.values())
+    def combinations(self):
+        """(run configs, skipped): every candidate combination the strategy accepts (e.g. not short ≥ long)."""
+        from itertools import product
+        from .strategies import resolve
+        base, keys, configs, skipped = self.model_dump(mode="json", exclude={"grid"}), list(self.grid), [], 0
+        for values in product(*(sorted(set(v)) for v in self.grid.values())):
+            params = dict(zip(keys, values))
+            try: resolve(self.strategy, params)
+            except ValueError:
+                skipped += 1
+                continue
+            configs.append(dict(base, params=params))
+        return configs, skipped
+
+@app.post("/api/grid")
+def grid(spec: Grid):
+    """Run every valid combination in-process (up to GRID_LIMIT short backtests)."""
+    if spec.count() > GRID_LIMIT:
+        raise HTTPException(422, f"조합 {spec.count()}개는 화면 실행 한도 {GRID_LIMIT}개를 넘습니다. 작업 목록을 받아 벤치마크나 클라우드로 실행하세요.")
+    check_range(spec)
+    configs, skipped = spec.combinations()
+    return dict(rows=[dict(params=c["params"], **summarize(c)) for c in configs], skipped=skipped)
+
+@app.post("/api/grid/manifest")
+def grid_manifest(spec: Grid):
+    """The same combinations as run configs for `lab.benchmark` / `lab.cloud experiment --manifest`."""
+    check_range(spec)
+    configs, skipped = spec.combinations()
+    return dict(configs=configs, skipped=skipped)
 
 @app.get("/api/stocks")
 def stock_search(q: str = ""):

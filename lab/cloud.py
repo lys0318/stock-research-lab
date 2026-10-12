@@ -21,17 +21,17 @@ def worker():
         folder=root()/"datasets"/version;folder.mkdir(parents=True,exist_ok=True)
         for name in ["prices.parquet","metadata.json"]:
             s3.download_file(bucket,prefix+"/datasets/"+version+"/"+name,str(folder/name))
-    results=[]
-    for config in configs:
-        value=measured(config)
-        value["config"]=config
-        results.append(value)
-    s3.put_object(Bucket=bucket,Key=prefix+f"/results/{index}.json",Body=json.dumps(results).encode())
+    from .report import pack
+    import io, pyarrow.parquet as pq
+    records,table=pack(index,(dict(measured(c),config=c) for c in configs))
+    buffer=io.BytesIO();pq.write_table(table,buffer,compression="zstd")
+    s3.put_object(Bucket=bucket,Key=prefix+f"/results/{index}.parquet",Body=buffer.getvalue())
+    s3.put_object(Bucket=bucket,Key=prefix+f"/results/{index}.json",Body=json.dumps(records).encode())
 
 def experiment(args):
     from .api import RunConfig
     configs=[RunConfig.model_validate(c).model_dump(mode="json") for c in json.loads(Path(args.manifest).read_text(encoding="utf-8"))]
-    if not 1<=len(configs)<=10000: raise ValueError("작업 수는 1~10000")  # ponytail: records keep full equity curves (~35KB/job); compact them before going past 10k
+    if not 1<=len(configs)<=50000: raise ValueError("작업 수는 1~50000")  # ponytail: a 2GB worker holds its group's curves in Arrow (~35B/day); keep jobs per worker under ~25k
     groups=[configs[i::args.workers] for i in range(args.workers)]
     groups=[g for g in groups if g]
     identifier=uuid.uuid4().hex;prefix="experiments/"+identifier
@@ -55,9 +55,12 @@ def experiment(args):
             if len(jobs)==len(ids) and all(j["status"]=="SUCCEEDED" for j in jobs): break
             if time.time()-began>args.timeout+300: raise TimeoutError("제출 이후 대기·실행 제한 초과")
             time.sleep(10)
-        records=[]
+        import io, pyarrow as pa, pyarrow.parquet as pq
+        from .report import save_report
+        records,tables=[],[]
         for i in range(len(groups)):
             records.extend(json.loads(s3.get_object(Bucket=args.bucket,Key=prefix+f"/results/{i}.json")["Body"].read()))
+            tables.append(pq.read_table(io.BytesIO(s3.get_object(Bucket=args.bucket,Key=prefix+f"/results/{i}.parquet")["Body"].read())))
         from .benchmark import concurrency
         duration=time.time()-began
         report=dict(id=identifier,environment="aws-fargate",created_at=datetime.now(timezone.utc).isoformat(),
@@ -68,7 +71,7 @@ def experiment(args):
             cpus=sorted({r.get("cpu","") for r in records}),records=records,cost_note="비용은 미산정. 리전별 단가와 청구 내역을 대조해야 합니다.",
             prefix=prefix,bucket=args.bucket)
         folder=root()/"benchmarks";folder.mkdir(exist_ok=True)
-        (folder/(identifier+".json")).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
+        save_report(folder/(identifier+".json"),report,pa.concat_tables(tables))
         success=True
         return report
     finally:

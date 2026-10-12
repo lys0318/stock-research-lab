@@ -2,6 +2,7 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from functools import cache
+import hashlib
 import json
 import platform
 import time
@@ -44,8 +45,11 @@ def benchmark(configs,workers,repeats=3):
     for w in workers:
         for repeat in range(repeats):
             began=time.time()
+            records=[]
             with ProcessPoolExecutor(max_workers=w,initializer=single_thread) as pool:
-                records=list(pool.map(measured,configs))
+                for r in pool.map(measured,configs):  # digest curves as they arrive instead of holding them all
+                    r["curve"]=hashlib.sha256(json.dumps(r["curve"]).encode()).hexdigest()
+                    records.append(r)
             elapsed=time.time()-began
             signature=[dict(metrics=r["metrics"],curve=r["curve"]) for r in records]
             if reference is None: reference=signature
@@ -67,8 +71,8 @@ def main():
     p.add_argument("--repeats",type=int,default=3)
     a=p.parse_args()
     configs=json.loads(Path(a.manifest).read_text(encoding="utf-8"))
-    if not isinstance(configs,list) or not 1<=len(configs)<=10000 or any(not 1<=w<=64 for w in a.workers) or not 1<=a.repeats<=3:
-        p.error("작업 1~10000개, 작업자 1~64, 반복 1~3회")
+    if not isinstance(configs,list) or not 1<=len(configs)<=50000 or any(not 1<=w<=64 for w in a.workers) or not 1<=a.repeats<=3:
+        p.error("작업 1~50000개, 작업자 1~64, 반복 1~3회")
     from .api import RunConfig
     configs=[RunConfig.model_validate(c).model_dump(mode="json") for c in configs]
     print(json.dumps(benchmark(configs,a.workers,a.repeats),ensure_ascii=False,indent=2))

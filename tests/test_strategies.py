@@ -111,3 +111,34 @@ def test_delete_run_removes_row_and_file():
         assert c.get("/api/runs/gone").status_code == 404
         assert c.delete("/api/runs/gone", headers=LOCAL).status_code == 404
     assert not store.result_path("gone").exists()
+
+def test_grid_runs_valid_combinations_only():
+    from fastapi.testclient import TestClient
+    from lab.api import app
+    meta = demo()
+    body = dict(dataset_id=meta["id"], start="2024-01-01", end="2025-12-31", strategy="golden",
+                grid={"short": [5, 10, 60], "long": [20, 60]})
+    with TestClient(app) as c:
+        r = c.post("/api/grid", json=body, headers=LOCAL).json()
+        assert sorted((x["params"]["short"], x["params"]["long"]) for x in r["rows"]) == [(5, 20), (5, 60), (10, 20), (10, 60)]
+        assert r["skipped"] == 2 and all(x["metrics"]["sharpe"] is not None for x in r["rows"])
+        too_many = dict(body, grid={"short": list(range(2, 22)), "long": list(range(30, 50))})
+        assert c.post("/api/grid", json=too_many, headers=LOCAL).status_code == 422
+        manifest = c.post("/api/grid/manifest", json=too_many, headers=LOCAL).json()
+        assert len(manifest["configs"]) == 400 and manifest["skipped"] == 0
+        assert all(m["strategy"] == "golden" and m["params"]["short"] < m["params"]["long"] for m in manifest["configs"])
+
+def test_compact_cloud_results_compare(tmp_path):
+    import json
+    from lab.benchmark import measured
+    from lab.report import compare, pack, save_report
+    meta = demo()
+    configs = [dict(dataset_id=meta["id"], start="2024-01-01", end="2025-12-31", strategy=s, params={}) for s in ("hold", "ma")]
+    records, table = pack(0, [dict(measured(c), config=c) for c in configs])
+    assert "curve" not in records[0] and table.num_rows == sum(len(run(c)["curve"]) for c in configs)
+    paths = [save_report(tmp_path / f"{n}.json", dict(id=n, runs=[{}], records=records), table) for n in ("a", "b")]
+    assert compare(paths) == {"verified_reports": 2}
+    bent = table.set_column(2, "equity", [[v * 1.01 for v in table.column("equity").to_pylist()]])
+    save_report(paths[1], json.loads(paths[1].read_text(encoding="utf-8")), bent)
+    with pytest.raises(ValueError, match="자산 경로"):
+        compare(paths)

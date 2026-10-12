@@ -21,6 +21,9 @@ def test_hand_calculated():
     assert result["metrics"]["final_equity"]==1100
     assert result["trades"][0]["shares"]==10
     assert result["metrics"]["total_return"]==pytest.approx(.1)
+    # Equity 1000 → 1000 → 1100: daily returns 0 and 0.1, two trading days.
+    assert result["metrics"]["sharpe"]==pytest.approx(.05/np.std([0,.1],ddof=1)*np.sqrt(252))
+    assert result["metrics"]["cagr"]==pytest.approx(1.1**126-1)
 
 def test_costs():
     r=simulate(frame(),[True,True],"hold",capital=1000,fee=.01,tax=.02,slippage=0)

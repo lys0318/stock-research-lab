@@ -22,7 +22,11 @@ export type Config = {
   seed: number;
   params?: Record<string, number>;
 };
-export type Metrics = { total_return: number; max_drawdown: number; trade_count: number; final_equity: number };
+export type Metrics = {
+  total_return: number; max_drawdown: number; trade_count: number; final_equity: number;
+  cagr?: number; sharpe?: number;  // absent in results saved before these metrics existed
+};
+export type GridResult = { rows: { params: Record<string, number>; metrics: Metrics | null; trips: number; win_rate: number | null; error: string | null }[]; skipped: number };
 export type Job = { id: string; status: string; config: Config; created_at: string; error?: string; metrics?: Metrics | null };
 export type Price = { date: string; open: number; high: number; low: number; close: number; volume: number };
 export type Trade = { date: string; side: string; shares: number; price: number; costs: number; phase?: "open" | "close" };

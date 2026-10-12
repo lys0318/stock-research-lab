@@ -29,7 +29,9 @@ export default function ResultView({ result }: { result: Result }) {
     </div>
     <div className="metrics">
       {hold !== null && <div><span>그냥 보유했다면</span><strong className={tone(hold)}>{pct(hold)}</strong><small>비용 제외</small></div>}
+      {m.cagr !== undefined && <div><span>연평균 수익률</span><strong className={tone(m.cagr)}>{pct(m.cagr)}</strong><small>연 252거래일로 환산</small></div>}
       <div><span>최대 낙폭</span><strong className="down">{pct(m.max_drawdown)}</strong><small>고점 대비 최대 하락</small></div>
+      {m.sharpe !== undefined && <div><span>샤프 비율</span><strong>{m.sharpe.toFixed(2)}</strong><small>변동성 대비 수익, 무위험 수익률 0</small></div>}
       <div><span>매매 횟수</span><strong>{trips.length}회</strong><small>매수→매도 한 번이 1회</small></div>
       <div><span>승률</span><strong>{trips.length ? Math.round(wins / trips.length * 100) + "%" : "—"}</strong><small>수익으로 끝난 매매 비율</small></div>
     </div>

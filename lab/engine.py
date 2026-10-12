@@ -92,9 +92,14 @@ def simulate(frame, signals, strategy, capital=1000000, fee=.00015, tax=0., slip
     equity = np.array([capital]+[r["equity"] for r in curve])
     drawdown = equity/np.maximum.accumulate(equity)-1
     for r, dd in zip(curve, drawdown[1:]): r["drawdown"] = float(dd)
+    # Annualised on 252 trading days; Sharpe with a zero risk-free rate, 0 when equity never moves.
+    daily = equity[1:]/equity[:-1]-1
+    spread = daily.std(ddof=1) if len(daily) > 1 else 0.
     return dict(curve=curve, trades=trades, metrics=dict(
         total_return=float(equity[-1]/capital-1), max_drawdown=float(drawdown.min()),
-        trade_count=len(trades), final_equity=float(equity[-1])))
+        trade_count=len(trades), final_equity=float(equity[-1]),
+        cagr=float((equity[-1]/capital)**(252/len(curve))-1),
+        sharpe=float(daily.mean()/spread*np.sqrt(252)) if spread > 0 else 0.))
 
 def round_trips(trades):
     """Profit of each buy→sell pair, costs on both legs. Trades always alternate buy, sell."""

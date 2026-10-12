@@ -11,7 +11,8 @@
 조건별 반복 3회. 예산 때문에 축소 시 실제 조건을 보고서에 기재한다.
 
 ## 로컬
-python -m lab.benchmark examples/manifest.json --workers 1 2 4 8 16 --repeats 3   (작업자 1~64, 작업 최대 1만 건)
+python -m lab.benchmark examples/manifest.json --workers 1 2 4 8 16 --repeats 3   (작업자 1~64, 작업 최대 5만 건)
+작업 목록은 화면의 '설정값 조합 실험 → 작업 목록 받기'로 만들 수 있다(규칙에 맞지 않는 조합은 제외).
 예시 dataset_id를 실제 로컬 버전으로 교체한다.
 동일 입력별 metrics/curve를 비교하고 불일치 시 실험 실패. 기록은 data/benchmarks.
 
@@ -105,5 +106,6 @@ AWS 실행 전에 예산 범위를 확인하기 위한 추정이다. 실제 실�
 취소 후 잔여 AWS 작업 확인. 수집 및 실행 시각, 이미지 버전, 로그를 보관한다.
 완료 시간 평균·최솟값·최댓값, 관측 동시성, 처리량과 비용을 제시한다.
 
+AWS 결과는 A.json(작업별 시각·지표·설정·CPU)과 A.curves.parquet(curve_id, date, equity)로 저장한다. 자산 곡선이 용량의 대부분이라 압축 열 저장으로 분리했고, 로컬 벤치마크는 곡선 대신 해시로 결과 일치를 확인한다.
 AWS 비교: python -m lab.report compare data/benchmarks/A.json data/benchmarks/B.json
 CSV 요약: python -m lab.report csv data/benchmarks/A.json --output summary.csv

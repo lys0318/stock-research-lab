@@ -102,7 +102,7 @@ legend, label { font-weight: 500; font-size: 13.5px; padding: 0; }
 label { display: grid; gap: 6px; }
 label small { font-weight: 400; }
 legend { margin-bottom: 10px; }
-input[type="date"], input[type="number"] { width: 100%; height: 40px; border: 1px solid var(--line); border-radius: var(--radius-field); padding: 0 12px; background: #fff; }
+input[type="date"], input[type="number"], input[type="text"] { width: 100%; height: 40px; border: 1px solid var(--line); border-radius: var(--radius-field); padding: 0 12px; background: #fff; }
 input:hover { border-color: var(--line-strong); }
 .date-pair { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px; color: var(--ink-3); }
 .date-pair input { padding: 0 8px; font-size: 13px; }
