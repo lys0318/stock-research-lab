@@ -58,7 +58,7 @@ export function History({ jobs, datasets, onOpen, onChanged, onError }: {
 
 export function Cloud({ reports }: { reports: Benchmark[] }) {
   return <>
-    <section className="page-title"><h1>클라우드 실험</h1><p className="muted">같은 계산을 작업자 1·2·4개로 나눠 실행하고 시간과 비용을 비교합니다.</p></section>
+    <section className="page-title"><h1>클라우드 실험</h1><p className="muted">같은 계산을 작업자 수를 바꿔 가며 실행하고 시간과 비용을 비교합니다. 로컬 측정은 종목 화면의 설정값 조합 실험에서 실행합니다.</p></section>
     <div className="table-wrap"><table>
       <thead><tr><th>지표</th><th>측정 기준</th></tr></thead>
       <tbody>

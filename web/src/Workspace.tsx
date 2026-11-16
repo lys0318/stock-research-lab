@@ -43,6 +43,9 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
   const [gridText, setGridText] = useState<Record<string, string>>({});
   const [grid, setGrid] = useState<GridResult | null>(null);
   const [gridding, setGridding] = useState(false);
+  const [benchWorkers, setBenchWorkers] = useState("1, 2, 4");
+  const [benching, setBenching] = useState(false);
+  const [benchDone, setBenchDone] = useState("");
   const errorRef = useRef<HTMLDivElement>(null);
   const running = !!job && ["queued", "running"].includes(job.status);
 
@@ -126,6 +129,17 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
       if (skipped) setError(`규칙에 맞지 않는 조합 ${skipped}개는 작업 목록에서 뺐습니다.`);
     } catch (err) { setError((err as Error).message); }
   }
+  async function runBenchmark() {
+    setError("");
+    setBenchDone("");
+    setBenching(true);
+    try {
+      const { jobs } = await api<{ id: string; jobs: number }>("/benchmarks", { method: "POST", body: JSON.stringify({ ...periodBody(), strategy: config.strategy, grid: gridSpec, workers: workerList }) });
+      setBenchDone(`${jobs.toLocaleString("ko-KR")}개 조합을 작업자 ${workerList.join("·")}개로 측정했습니다.`);
+      onChanged();
+    } catch (err) { setError((err as Error).message); }
+    finally { setBenching(false); }
+  }
   async function cancel() {
     if (!job) return;
     try { setJob(await api<Job>(`/runs/${job.id}/cancel`, { method: "POST" })); onChanged(); }
@@ -136,6 +150,8 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
   const gridSpec = Object.fromEntries((selected?.params ?? []).map((p) => [p.key, candidates(gridText[p.key] ?? String(current(p.key, p.default)))]));
   const gridBad = Object.values(gridSpec).some((v) => !v.length || v.some((n) => !Number.isFinite(n)));
   const gridCount = Object.values(gridSpec).reduce((n, v) => n * new Set(v).size, 1);
+  const workerList = [...new Set(candidates(benchWorkers))];
+  const workersBad = !workerList.length || workerList.length > 8 || workerList.some((n) => !Number.isInteger(n) || n < 1 || n > 64);
   const paramText = (params: Record<string, number>) => (selected?.params ?? []).map((p) => `${p.label.replace(/\(.*\)/, "")} ${params[p.key]}`).join(" · ");
   const name = dataset?.name ?? initial?.dataset.name ?? nameHints.get(symbol) ?? symbol;
   const field = (key: "fee" | "tax" | "slippage", label: string, hint: string) => <label>
@@ -209,6 +225,16 @@ export default function Workspace({ symbol, initial, onChanged, onBack }: {
                     {gridding ? <><span className="spinner" />계산 중…</> : "조합 실행"}</button>
                   <button type="button" className="btn btn-ghost" onClick={downloadManifest} disabled={gridBad}>작업 목록 받기</button>
                 </div>
+                <label>로컬 벤치마크 작업자 수
+                  <input type="text" inputMode="numeric" placeholder="예: 1, 2, 4, 8" value={benchWorkers}
+                    onChange={(e) => setBenchWorkers(e.target.value)} />
+                </label>
+                <small className={workersBad ? "error-text" : ""}>
+                  {workersBad ? "1~64 사이 정수를 쉼표로 구분해 8개까지 넣으세요." : "같은 조합을 작업자 수마다 3번씩 실행해 시간을 잽니다. 결과는 클라우드 실험 화면에 쌓입니다."}
+                </small>
+                <button type="button" className="btn btn-secondary" onClick={runBenchmark} disabled={gridBad || workersBad || benching}>
+                  {benching ? <><span className="spinner" />측정 중…</> : "로컬 벤치마크 실행"}</button>
+                {benchDone && <small role="status">{benchDone} <a href="#/cloud">결과 보기</a></small>}
               </div>}
             </>}
           </fieldset>

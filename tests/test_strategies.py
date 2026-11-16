@@ -128,6 +128,19 @@ def test_grid_runs_valid_combinations_only():
         assert len(manifest["configs"]) == 400 and manifest["skipped"] == 0
         assert all(m["strategy"] == "golden" and m["params"]["short"] < m["params"]["long"] for m in manifest["configs"])
 
+def test_local_benchmark_runs_grid_through_cli():
+    from fastapi.testclient import TestClient
+    from lab.api import app
+    meta = demo()
+    body = dict(dataset_id=meta["id"], start="2024-01-01", end="2025-12-31", strategy="golden",
+                grid={"short": [5, 10], "long": [20]}, workers=[1, 2], repeats=1)
+    with TestClient(app) as c:
+        r = c.post("/api/benchmarks", json=body, headers=LOCAL)
+        assert r.status_code == 200 and r.json()["jobs"] == 2
+        report = next(b for b in c.get("/api/benchmarks").json() if b["id"] == r.json()["id"])
+        assert [x["workers"] for x in report["runs"]] == [1, 2] and all(x["equal_results"] for x in report["runs"])
+        assert c.post("/api/benchmarks", json=dict(body, workers=[65]), headers=LOCAL).status_code == 422
+
 def test_compact_cloud_results_compare(tmp_path):
     import json
     from lab.benchmark import measured

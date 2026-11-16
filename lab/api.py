@@ -1,11 +1,15 @@
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import uuid
 import threading
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from datetime import date
+from pathlib import Path
+from typing import Annotated
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, model_validator
@@ -186,6 +190,31 @@ def grid_manifest(spec: Grid):
     configs, skipped = spec.combinations()
     return dict(configs=configs, skipped=skipped)
 
+class LocalBenchmark(Grid):
+    workers: list[Annotated[int, Field(ge=1, le=64)]] = Field(min_length=1, max_length=8)
+    repeats: int = Field(default=3, ge=1, le=3)
+
+benchmark_lock = threading.Lock()
+
+@app.post("/api/benchmarks")
+def local_benchmark(spec: LocalBenchmark):
+    """The grid's combinations through the same `lab.benchmark` CLI, in its own process so the server does not skew timings."""
+    check_range(spec)
+    configs, _ = spec.combinations()
+    if not configs: raise HTTPException(422, "규칙에 맞는 조합이 없습니다.")
+    if not benchmark_lock.acquire(blocking=False): raise HTTPException(409, "이미 로컬 벤치마크가 실행 중입니다.")
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = Path(folder)/"manifest.json"
+            manifest.write_text(json.dumps(configs), encoding="utf-8")
+            done = subprocess.run([sys.executable, "-m", "lab.benchmark", str(manifest), "--workers", *map(str, spec.workers), "--repeats", str(spec.repeats)],
+                                  capture_output=True, text=True, encoding="utf-8", timeout=3600,
+                                  env={**os.environ, "PYTHONIOENCODING": "utf-8"})  # Korean messages through Windows pipes
+    except subprocess.TimeoutExpired: raise HTTPException(504, "로컬 벤치마크가 1시간 안에 끝나지 않았습니다.")
+    finally: benchmark_lock.release()
+    if done.returncode: raise HTTPException(500, (done.stderr.strip().splitlines() or ["로컬 벤치마크 실패"])[-1])
+    return dict(id=json.loads(done.stdout)["id"], jobs=len(configs))
+
 @app.get("/api/stocks")
 def stock_search(q: str = ""):
     from .stocks import search
@@ -212,7 +241,7 @@ def benchmarks():
         report.pop("records",None)
         for record in report.get("runs",[]): record.pop("records",None)
         output.append(report)
-    return output
+    return sorted(output, key=lambda r: r.get("created_at", ""), reverse=True)  # newest first on the cloud page
 
 def job_or_404(identifier):
     job = store.get(identifier)
